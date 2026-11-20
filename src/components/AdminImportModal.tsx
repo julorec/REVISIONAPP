@@ -8,7 +8,6 @@ import {
   GitMerge,
   Lock,
   Pencil,
-  Sparkles,
   Trash2,
   Upload,
   X,
@@ -17,7 +16,6 @@ import {
   appendQuestionsToSectionDsInSupabase,
   deleteQuizInSupabase,
   insertQuizToSupabase,
-  publishStarterBankToSupabase,
   updateQuizInSupabase,
 } from '../lib/supabase';
 import type { QuizRow } from '../types/quiz';
@@ -90,7 +88,6 @@ export function AdminImportModal({
   const [editingRow, setEditingRow] = useState<QuizRow | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [publishingStarter, setPublishingStarter] = useState(false);
 
   const [matiere, setMatiere] = useState('Programmation C');
   const [sectionDs, setSectionDs] = useState('DS 1');
@@ -278,27 +275,6 @@ export function AdminImportModal({
     }
   };
 
-  const handlePublishStarterBank = async () => {
-    setPublishingStarter(true);
-    setStatusMsg(null);
-    const res = await publishStarterBankToSupabase();
-    setPublishingStarter(false);
-
-    if (res.ok) {
-      setStatusMsg({
-        kind: 'success',
-        text: `${res.insertedCount} banques d'exemple publiées dans Supabase — disponibles pour tous les étudiants.`,
-      });
-      setImportMode('merge');
-      await onImported();
-    } else {
-      setStatusMsg({
-        kind: 'error',
-        text: res.error || "Impossible de publier les quiz d'exemple dans Supabase.",
-      });
-    }
-  };
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/55 p-0 sm:p-4"
@@ -381,31 +357,6 @@ export function AdminImportModal({
         ) : (
           /* ==================== SUPABASE-DIRECT ADMIN WORKSPACE ==================== */
           <form onSubmit={handleSubmitSupabase} className="p-5 sm:p-6 space-y-4">
-            {/* Optional 1-click starter publish when Supabase is empty */}
-            {allQuizzes.length === 0 && !editingRow && (
-              <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-[13.5px] text-[var(--dim)]">
-                  <p className="font-semibold text-[var(--text)]">Base Supabase vide</p>
-                  <p className="mt-0.5">
-                    Importez un JSON ci-dessous ou publiez les quiz de démarrage ESET 3A en un clic.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  disabled={publishingStarter}
-                  onClick={handlePublishStarterBank}
-                  className="inline-flex min-h-[42px] shrink-0 items-center justify-center gap-2 rounded-xl border border-[var(--accent)] bg-[var(--accent-soft)] px-3.5 py-2 text-[13px] font-semibold text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] transition-colors disabled:opacity-50"
-                >
-                  <Sparkles className="h-4 w-4 shrink-0" />
-                  <span>
-                    {publishingStarter
-                      ? 'Publication...'
-                      : "Publier les quiz d'exemple dans Supabase"}
-                  </span>
-                </button>
-              </div>
-            )}
-
             {editingRow ? (
               <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--accent)] bg-[var(--accent-soft)] px-3.5 py-2.5 text-[13px]">
                 <span className="font-medium text-[var(--text)]">

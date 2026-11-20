@@ -13,7 +13,6 @@ import { useTheme } from './hooks/useTheme';
 import {
   fetchQuizzes,
   fetchScores,
-  loadCachedSupabaseQuizzes,
   loadProgress,
   loadStudentPseudo,
   recordQuizScore,
@@ -58,9 +57,9 @@ export default function App() {
   const [pseudo, setPseudo] = useState<string>(() => loadStudentPseudo());
   const [pseudoModalOpen, setPseudoModalOpen] = useState<boolean>(() => !loadStudentPseudo());
 
-  // Instant hydration from read-only offline cache; immediately refreshed from Supabase on mount
-  const [rows, setRows] = useState<QuizRow[]>(() => loadCachedSupabaseQuizzes());
-  const [loading, setLoading] = useState<boolean>(() => loadCachedSupabaseQuizzes().length === 0);
+  // Always load real quiz rows directly from Supabase (zero local or default quiz data)
+  const [rows, setRows] = useState<QuizRow[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
   const [syncError, setSyncError] = useState<string | null>(null);
 

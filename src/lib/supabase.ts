@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import { SEED_QUIZZES } from '../data/seedQuizzes';
 import type { ProgressMap, QuizQuestion, QuizRow, ScoreEntry } from '../types/quiz';
 import { mergeQuestionsIntoBatch, normalizeSectionDs } from '../utils/quizEngine';
 import { normalizeQuestionList } from '../utils/quizNormalizer';
@@ -22,8 +21,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
 });
 
-// Read-only offline caches (strictly overwritten by every fresh Supabase response)
-const STORAGE_QUIZZES_CACHE_KEY = 'coach_partiels_supabase_cache_v4';
+// Client storage keys (scores offline outbox, personal progress & pseudo only — quizzes are 100% live from Supabase)
 const STORAGE_SCORES_CACHE_KEY = 'coach_partiels_scores_cache_v2';
 const STORAGE_PENDING_SCORES_KEY = 'coach_partiels_pending_scores_v1';
 const STORAGE_PROGRESS_KEY = 'coach_partiels_progress_v1';
@@ -51,11 +49,11 @@ export function saveStudentPseudo(pseudo: string): string {
 }
 
 // ============================================================================
-// QUIZZES — SUPABASE SINGLE SOURCE OF TRUTH (+ READ-ONLY OFFLINE CACHE)
+// QUIZZES — 100% LIVE FROM SUPABASE (NO LOCAL OR DEFAULT DATA)
 // ============================================================================
 export interface FetchQuizzesResult {
   rows: QuizRow[];
-  source: 'supabase' | 'offline-cache';
+  source: 'supabase' | 'error';
   error?: string;
 }
 
@@ -91,36 +89,9 @@ function hydrateSupabaseRow(raw: RawSupabaseQuizRow): QuizRow | null {
   };
 }
 
-export function loadCachedSupabaseQuizzes(): QuizRow[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_QUIZZES_CACHE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? (parsed as QuizRow[]).map((r) => ({
-          ...r,
-          section_ds: normalizeSectionDs(r.section_ds),
-          chapitre: r.chapitre || 'Banque générale',
-          origin: 'supabase',
-        }))
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveCachedSupabaseQuizzes(rows: QuizRow[]): void {
-  try {
-    localStorage.setItem(STORAGE_QUIZZES_CACHE_KEY, JSON.stringify(rows));
-  } catch {
-    // Ignore quota errors
-  }
-}
-
 /**
  * Fetches the authoritative quiz catalog directly from Supabase.
- * Never mixes local drafts or fake seed rows: when Supabase returns [],
- * the cache is cleared and [] is returned so every user sees the exact same state.
+ * Never returns local, cached, or default quizzes.
  */
 export async function fetchQuizzes(): Promise<FetchQuizzesResult> {
   try {
@@ -131,8 +102,8 @@ export async function fetchQuizzes(): Promise<FetchQuizzesResult> {
 
     if (error) {
       return {
-        rows: loadCachedSupabaseQuizzes(),
-        source: 'offline-cache',
+        rows: [],
+        source: 'error',
         error: `${error.code ?? 'SUPABASE'} : ${error.message}`,
       };
     }
@@ -141,7 +112,6 @@ export async function fetchQuizzes(): Promise<FetchQuizzesResult> {
       .map(hydrateSupabaseRow)
       .filter((r): r is QuizRow => r !== null);
 
-    saveCachedSupabaseQuizzes(hydrated);
     return {
       rows: hydrated,
       source: 'supabase',
@@ -149,8 +119,8 @@ export async function fetchQuizzes(): Promise<FetchQuizzesResult> {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Erreur réseau Supabase';
     return {
-      rows: loadCachedSupabaseQuizzes(),
-      source: 'offline-cache',
+      rows: [],
+      source: 'error',
       error: message,
     };
   }
@@ -336,49 +306,6 @@ export async function deleteQuizInSupabase(id: string): Promise<{ ok: boolean; e
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'Impossible de joindre Supabase.',
-    };
-  }
-}
-
-/**
- * Optional 1-click Admin action: publishes the curated ESET 3A starter bank directly
- * into Supabase so all users receive real shared rows immediately.
- */
-export async function publishStarterBankToSupabase(): Promise<{
-  ok: boolean;
-  insertedCount: number;
-  error?: string;
-}> {
-  try {
-    const payload = SEED_QUIZZES.map((row) => ({
-      matiere: row.matiere,
-      section_ds: normalizeSectionDs(row.section_ds),
-      chapitre: row.chapitre || row.section_ds,
-      questions: row.questions,
-    }));
-
-    const { data, error } = await supabase
-      .from('quizzes')
-      .insert(payload)
-      .select('id');
-
-    if (error) {
-      return {
-        ok: false,
-        insertedCount: 0,
-        error: `${error.code ?? 'Erreur Supabase'} : ${error.message}`,
-      };
-    }
-
-    return {
-      ok: true,
-      insertedCount: Array.isArray(data) ? data.length : payload.length,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      insertedCount: 0,
       error: err instanceof Error ? err.message : 'Impossible de joindre Supabase.',
     };
   }

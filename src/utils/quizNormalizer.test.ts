@@ -101,3 +101,55 @@ test('normalizeQuestionList rejects invalid calcul and ordre schemas with clear 
   assert.equal(res.ok, false);
   assert.equal(res.errors.length, 2);
 });
+
+test('normalizeQuestionList accepts reponse_index, reponse, answer, and ans across qcm and vrai_faux', () => {
+  const res = normalizeQuestionList([
+    {
+      type: 'qcm',
+      question: 'QCM avec reponse_index numérique',
+      options: ['A0', 'A1', 'A2', 'A3'],
+      reponse_index: 2,
+      explication: 'Index 2 attendu.',
+    },
+    {
+      type: 'vrai_faux',
+      question: 'Vrai/Faux avec reponse_index = 0',
+      reponse_index: 0,
+      explication: 'Vrai = index 0.',
+    },
+    {
+      type: 'vrai_faux',
+      question: 'Vrai/Faux avec reponse = "false"',
+      reponse: 'false',
+      explication: 'Faux = index 1.',
+    },
+    {
+      type: 'qcm',
+      question: 'QCM avec reponse texte exact',
+      options: ['malloc', 'calloc', 'free'],
+      reponse: 'free',
+      explication: 'Match texte exact.',
+    },
+    {
+      type: 'qcm',
+      question: 'QCM avec answer lettre et ans numérique',
+      options: ['O1', 'O2'],
+      answer: 'B',
+      explication: 'Lettre B = index 1.',
+    },
+    {
+      type: 'qcm',
+      question: 'QCM avec ans = 0',
+      options: ['O1', 'O2'],
+      ans: 0,
+      explication: 'ans = 0.',
+    },
+  ]);
+
+  assert.equal(res.ok, true, res.errors.join('; '));
+  assert.deepEqual(
+    res.questions.map((q) => q.ans),
+    [2, 0, 1, 2, 1, 0]
+  );
+});
+

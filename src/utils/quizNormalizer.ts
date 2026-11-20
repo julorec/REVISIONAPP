@@ -131,6 +131,12 @@ function resolveAnswerIndex(rawAns: unknown, opts: string[], isVraiFaux = false)
       if (idx >= 0 && idx < opts.length) return idx;
     }
     const lower = trimmed.toLowerCase();
+    if (isVraiFaux && opts.length >= 2) {
+      const vraiIdx = opts.findIndex((o) => /^(vrai|true)$/i.test(o.trim()));
+      const fauxIdx = opts.findIndex((o) => /^(faux|false)$/i.test(o.trim()));
+      if ((lower === 'true' || lower === 'vrai') && vraiIdx !== -1) return vraiIdx;
+      if ((lower === 'false' || lower === 'faux') && fauxIdx !== -1) return fauxIdx;
+    }
     if (lower.length === 1 && lower in LETTER_TO_INDEX) {
       const idx = LETTER_TO_INDEX[lower];
       if (idx < opts.length) return idx;
@@ -335,6 +341,8 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
     }
 
     const rawAns =
+      rec.reponse_index ??
+      rec.réponse_index ??
       rec.ans ??
       rec.answer ??
       rec.reponse ??
@@ -347,7 +355,7 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
     const ans = resolveAnswerIndex(rawAns, opts, qType === 'vrai_faux');
     if (ans === null) {
       errors.push(
-        `${label} : réponse correcte ("ans", "answer" ou "reponse") invalide ou hors limites (attendu 0..${opts.length - 1}, "A".."${String.fromCharCode(64 + opts.length)}" ou texte exact d'un choix).`
+        `${label} : réponse correcte ("reponse_index", "reponse", "answer" ou "ans") invalide ou hors limites (attendu 0..${opts.length - 1}, "A".."${String.fromCharCode(64 + opts.length)}" ou texte exact d'un choix).`
       );
       return;
     }
