@@ -29,19 +29,81 @@ jobs:
         with:
           version: latest
 
-      - name: Vérifier les secrets requis
-        run: |
-          if [ -z "$SUPABASE_DB_URL" ]; then
-            echo "::error::Le secret GitHub SUPABASE_DB_URL est manquant (Settings > Secrets and variables > Actions)."
-            exit 1
-          fi
-
       - name: Appliquer supabase/schema.sql (idempotent)
         run: |
-          if ! command -v psql >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y postgresql-client
+          if [ -n "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "Mode sans mot de passe BDD : exécution de supabase/schema.sql via l'API Management Supabase..."
+            python3 - <<'PY'
+          import json, os, sys, urllib.request, urllib.error
+
+          token = os.environ["SUPABASE_ACCESS_TOKEN"].strip()
+          ref = os.environ["SUPABASE_PROJECT_REF"].strip()
+          if not token.startswith("sbp_"):
+              print("::warning::Le token SUPABASE_ACCESS_TOKEN ne commence pas par 'sbp_'. Vérifiez qu'il s'agit bien d'un Personal Access Token (https://supabase.com/dashboard/account/tokens) et non d'une clé anon/service_role.")
+
+          with open("supabase/schema.sql", "r", encoding="utf-8") as fh:
+              sql = fh.read()
+
+          url = f"https://api.supabase.com/v1/projects/{ref}/database/query"
+          payload = json.dumps({"query": sql}).encode("utf-8")
+          req = urllib.request.Request(
+              url,
+              data=payload,
+              method="POST",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Content-Type": "application/json",
+                  "User-Agent": "coach-partiels-github-actions/1.0",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  body = resp.read().decode("utf-8", errors="replace")
+                  print(f"schema.sql appliqué avec succès (HTTP {resp.status}).")
+                  if body.strip() and body.strip() != "[]":
+                      print(body[:500])
+          except urllib.error.HTTPError as err:
+              err_body = err.read().decode("utf-8", errors="replace")
+              print(f"::error::Échec API Management Supabase (HTTP {err.code}) : {err_body}")
+              sys.exit(1)
+          PY
+          elif [ -n "$SUPABASE_DB_URL" ]; then
+            echo "Mode psql via SUPABASE_DB_URL..."
+            if ! command -v psql >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y postgresql-client
+            fi
+            python3 - <<'PY'
+          import os, re, subprocess, sys
+          from urllib.parse import urlparse
+
+          cleaned = os.environ.get("SUPABASE_DB_URL", "").strip()
+          if cleaned.lower().startswith("psql "):
+              cleaned = cleaned[5:].strip()
+          if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in ("'", '"'):
+              cleaned = cleaned[1:-1].strip()
+
+          if not re.match(r"^postgres(ql)?://", cleaned):
+              print("::error::SUPABASE_DB_URL invalide (doit commencer par postgresql://). Alternative sans mot de passe : configurez uniquement le secret SUPABASE_ACCESS_TOKEN (sbp_...).")
+              sys.exit(1)
+          if "[YOUR-PASSWORD]" in cleaned:
+              print("::error::Remplacez [YOUR-PASSWORD] dans SUPABASE_DB_URL ou utilisez SUPABASE_ACCESS_TOKEN sans mot de passe.")
+              sys.exit(1)
+          parsed = urlparse(cleaned)
+          if not parsed.hostname:
+              print("::error::Hôte introuvable dans SUPABASE_DB_URL.")
+              sys.exit(1)
+          if "sslmode=" not in cleaned:
+              sep = "&" if "?" in cleaned else "?"
+              cleaned = f"{cleaned}{sep}sslmode=require"
+
+          print(f"::add-mask::{cleaned}")
+          res = subprocess.run(["psql", "-d", cleaned, "-v", "ON_ERROR_STOP=1", "-f", "supabase/schema.sql"])
+          sys.exit(res.returncode)
+          PY
+          else
+            echo "::error::Configurez le secret SUPABASE_ACCESS_TOKEN (recommandé, sans mot de passe BDD : https://supabase.com/dashboard/account/tokens) ou SUPABASE_DB_URL dans GitHub > Settings > Secrets > Actions."
+            exit 1
           fi
-          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f supabase/schema.sql
 
       - name: Déployer les Edge Functions Supabase (si présentes)
         run: |
