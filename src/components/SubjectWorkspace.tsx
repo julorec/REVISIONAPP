@@ -1,253 +1,317 @@
-import { ArrowLeft, Play, RotateCcw, Shuffle } from 'lucide-react';
-import type { HydratedQuestion, QuizMode, SubjectSummary } from '../types/quiz';
+import { useEffect, useState } from 'react';
+import { BookOpen, Check, Play, RotateCcw, Shuffle, Trophy, X } from 'lucide-react';
+import type {
+  ExamSize,
+  HydratedQuestion,
+  QuizRow,
+  ScoreEntry,
+  SubjectSummary,
+} from '../types/quiz';
+import { countMatchingThemeQuestions } from '../utils/quizEngine';
+import { SubjectLeaderboard } from './SubjectLeaderboard';
+
+export type SubjectSubTab = 'revisions' | 'classement';
 
 interface SubjectWorkspaceProps {
   subject: SubjectSummary;
-  selectedChapter: string;
-  selectedMode: QuizMode;
-  matchingCount: number;
+  allRows: QuizRow[];
+  activeSubTab: SubjectSubTab;
   missedQuestions: HydratedQuestion[];
-  onChangeChapter: (chapitre: string) => void;
-  onChangeMode: (mode: QuizMode) => void;
-  onStartQuiz: () => void;
+  scores: ScoreEntry[];
+  scoresLoading: boolean;
+  currentPseudo: string;
+  leaderboardSectionFilter: string;
+  onChangeSubTab: (tab: SubjectSubTab) => void;
+  onChangeLeaderboardSection: (sectionDs: string) => void;
+  onRefreshScores: () => void;
+  onLaunchSectionExam: (sectionDs: string, examSize: ExamSize) => void;
+  onLaunchThemesQuiz: (sectionDs: string, selectedThemes: string[]) => void;
   onReplayMissed: () => void;
-  onBack: () => void;
 }
 
 export function SubjectWorkspace({
   subject,
-  selectedChapter,
-  selectedMode,
-  matchingCount,
+  allRows,
+  activeSubTab,
   missedQuestions,
-  onChangeChapter,
-  onChangeMode,
-  onStartQuiz,
+  scores,
+  scoresLoading,
+  currentPseudo,
+  leaderboardSectionFilter,
+  onChangeSubTab,
+  onChangeLeaderboardSection,
+  onRefreshScores,
+  onLaunchSectionExam,
+  onLaunchThemesQuiz,
   onReplayMissed,
-  onBack,
 }: SubjectWorkspaceProps) {
-  const isExamMode = selectedMode === 'exam';
-  const examSize = Math.min(20, subject.totalQuestions);
+  // Multi-selected themes keyed per section_ds
+  const [selectedThemesByDs, setSelectedThemesByDs] = useState<Record<string, string[]>>({});
+  // Preferred exam length (20 or 30 questions) keyed per section_ds
+  const [examSizeByDs, setExamSizeByDs] = useState<Record<string, ExamSize>>({});
+
+  // Reset theme selections cleanly when switching subject
+  useEffect(() => {
+    setSelectedThemesByDs({});
+  }, [subject.matiere]);
+
+  const toggleTheme = (sectionDs: string, theme: string) => {
+    setSelectedThemesByDs((prev) => {
+      const current = prev[sectionDs] ?? [];
+      const exists = current.includes(theme);
+      const next = exists ? current.filter((t) => t !== theme) : [...current, theme];
+      return { ...prev, [sectionDs]: next };
+    });
+  };
+
+  const clearThemes = (sectionDs: string) => {
+    setSelectedThemesByDs((prev) => ({ ...prev, [sectionDs]: [] }));
+  };
+
+  const getExamSize = (sectionDs: string): ExamSize => examSizeByDs[sectionDs] ?? 20;
 
   return (
-    <section className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
-      <button
-        type="button"
-        onClick={onBack}
-        className="inline-flex min-h-[40px] items-center gap-1.5 text-[14px] font-medium text-[var(--accent)] hover:underline underline-offset-4"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        <span>Retour au catalogue</span>
-      </button>
-
-      <div className="mt-3 border-b border-[var(--line)] pb-4">
-        <p className="font-mono-code text-[11.5px] font-medium uppercase tracking-[0.08em] text-[var(--warm)]">
-          {subject.totalQuestions} questions · {subject.coursCount} Cours · {subject.annalesCount} Annales
-        </p>
-        <h1 className="mt-1 text-[24px] sm:text-[27px] font-semibold tracking-[-0.015em] text-[var(--text)]">
-          {subject.matiere}
-        </h1>
-      </div>
-
-      {/* Mode & Type Filter */}
-      <div className="mt-5 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5">
-        <p className="font-mono-code text-[11.5px] font-medium uppercase tracking-[0.06em] text-[var(--dim)]">
-          Mode &amp; source
-        </p>
-
-        <div
-          className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4"
-          role="radiogroup"
-          aria-label="Filtrer par type ou mode examen"
-        >
-          {(
-            [
-              { id: 'all', label: 'Tout', sub: `${subject.totalQuestions} q.` },
-              { id: 'Cours', label: 'Cours', sub: `${subject.coursCount} q.` },
-              { id: 'Annales', label: 'Annales', sub: `${subject.annalesCount} q.` },
-              { id: 'exam', label: 'Examen Mélangé', sub: `${examSize} q. aléatoires` },
-            ] as const
-          ).map((item) => {
-            const active = selectedMode === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => onChangeMode(item.id)}
-                className={`flex min-h-[54px] flex-col items-start justify-center rounded-lg border px-3 py-2 text-left transition-colors ${
-                  active
-                    ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)]'
-                    : 'border-[var(--line)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--accent)]'
-                }`}
-              >
-                <span className="flex items-center gap-1.5 text-[13.5px] font-semibold">
-                  {item.id === 'exam' && <Shuffle className="h-3.5 w-3.5 text-[var(--accent)] shrink-0" />}
-                  {item.label}
-                </span>
-                <span className="font-mono-code text-[11.5px] text-[var(--dim)] tabular-nums">
-                  {item.sub}
-                </span>
-              </button>
-            );
-          })}
+    <section className="mx-auto max-w-5xl px-4 py-4 sm:px-6 sm:py-6 pb-24 md:pb-10">
+      {/* Compact Subject Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-[22px] sm:text-[26px] font-semibold tracking-[-0.02em] text-[var(--text)] leading-tight">
+            {subject.matiere}
+          </h1>
+          <p className="mt-0.5 text-[13px] text-[var(--dim)] tabular-nums">
+            {subject.sections.length} DS · {subject.totalQuestions} questions ·{' '}
+            {subject.seenCount}/{subject.totalQuestions} vues
+            {subject.successRate !== null && <> · {subject.successRate}% réussite</>}
+          </p>
         </div>
 
-        {/* Chapter Filter */}
-        <div className="mt-5">
-          <div className="flex items-baseline justify-between gap-2">
-            <p className="font-mono-code text-[11.5px] font-medium uppercase tracking-[0.06em] text-[var(--dim)]">
-              Chapitre
-            </p>
-            {isExamMode && (
-              <span className="text-[12px] text-[var(--dim)]">
-                Tous les chapitres sont mélangés en mode examen
-              </span>
-            )}
-          </div>
-
-          <div
-            className={`mt-2.5 flex flex-wrap gap-2 ${isExamMode ? 'opacity-50 pointer-events-none' : ''}`}
-            role="group"
-            aria-label="Filtrer par chapitre"
-          >
-            <button
-              type="button"
-              aria-pressed={selectedChapter === 'all'}
-              onClick={() => onChangeChapter('all')}
-              className={`min-h-[40px] rounded-lg border px-3.5 py-1.5 text-[13.5px] font-medium transition-colors ${
-                selectedChapter === 'all'
-                  ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-ink)]'
-                  : 'border-[var(--line)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--accent)]'
-              }`}
-            >
-              Tous les chapitres
-              <span className="ml-1.5 font-mono-code text-[12px] opacity-80 tabular-nums">
-                {subject.totalQuestions}
-              </span>
-            </button>
-
-            {subject.chapters.map((ch) => {
-              const active = selectedChapter === ch.chapitre;
-              return (
-                <button
-                  key={ch.chapitre}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => onChangeChapter(ch.chapitre)}
-                  className={`min-h-[40px] rounded-lg border px-3.5 py-1.5 text-[13.5px] font-medium transition-colors ${
-                    active
-                      ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-ink)]'
-                      : 'border-[var(--line)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--accent)]'
-                  }`}
-                >
-                  {ch.chapitre}
-                  <span className="ml-1.5 font-mono-code text-[12px] opacity-80 tabular-nums">
-                    {ch.totalQuestions}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Primary Launch Bar */}
-        <div className="mt-6 flex flex-col gap-3 border-t border-[var(--line)] pt-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-[14.5px] font-medium text-[var(--text)]">
-              {isExamMode
-                ? `Examen mélangé : ${examSize} questions tirées aléatoirement`
-                : matchingCount > 0
-                  ? `${matchingCount} question${matchingCount > 1 ? 's' : ''} prête${matchingCount > 1 ? 's' : ''}`
-                  : 'Aucune question ne correspond à ce filtre'}
-            </p>
-            <p className="text-[12.5px] text-[var(--dim)]">
-              Correction immédiate avec explication détaillée, formules KaTeX et coloration syntaxique.
-            </p>
-          </div>
-
+        {missedQuestions.length > 0 && activeSubTab === 'revisions' && (
           <button
             type="button"
-            disabled={matchingCount === 0}
-            onClick={onStartQuiz}
-            className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2.5 text-[14.5px] font-semibold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-45 whitespace-nowrap"
+            onClick={onReplayMissed}
+            className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-[var(--bad)] bg-[var(--surface)] px-3.5 py-2 text-[13px] font-semibold text-[var(--bad)] transition-colors hover:bg-[var(--bad-soft)] whitespace-nowrap"
           >
-            {isExamMode ? (
-              <Shuffle className="h-4 w-4 shrink-0" />
-            ) : (
-              <Play className="h-4 w-4 shrink-0" />
-            )}
-            <span>{isExamMode ? `Lancer l'examen (${examSize}q)` : 'Lancer le quiz'}</span>
+            <RotateCcw className="h-3.5 w-3.5 shrink-0" />
+            <span>Rejouer erreurs ({missedQuestions.length})</span>
           </button>
-        </div>
-
-        {missedQuestions.length > 0 && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-4 py-3">
-            <span className="text-[13.5px] text-[var(--text)]">
-              Vous avez{' '}
-              <strong className="font-mono-code text-[var(--bad)] tabular-nums">
-                {missedQuestions.length}
-              </strong>{' '}
-              question{missedQuestions.length > 1 ? 's' : ''} ratée{missedQuestions.length > 1 ? 's' : ''} récemment dans cette matière.
-            </span>
-            <button
-              type="button"
-              onClick={onReplayMissed}
-              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-[var(--bad)] bg-[var(--surface)] px-3.5 py-1.5 text-[13px] font-semibold text-[var(--bad)] transition-colors hover:bg-[var(--bad-soft)] whitespace-nowrap"
-            >
-              <RotateCcw className="h-3.5 w-3.5 shrink-0" />
-              <span>Rejouer mes erreurs ({missedQuestions.length})</span>
-            </button>
-          </div>
         )}
       </div>
 
-      {/* Chapter mastery table */}
-      <div className="mt-5 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5">
-        <p className="font-mono-code text-[11.5px] font-medium uppercase tracking-[0.06em] text-[var(--dim)]">
-          Détail par chapitre
-        </p>
-        <div className="mt-3 divide-y divide-[var(--line)]">
-          {subject.chapters.map((ch) => {
-            const pct = ch.triesCount > 0 ? Math.round((ch.rightCount / ch.triesCount) * 100) : null;
+      {/* Desktop Sub-tabs: Révisions | Classement (Mobile uses thumb-zone bottom bar) */}
+      <nav
+        className="mt-4 hidden md:flex gap-2 border-b border-[var(--line)]"
+        role="tablist"
+        aria-label={`Vues de ${subject.matiere}`}
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeSubTab === 'revisions'}
+          onClick={() => onChangeSubTab('revisions')}
+          className={`inline-flex min-h-[44px] items-center gap-2 border-b-2 px-3.5 py-2.5 text-[14.5px] font-medium transition-colors -mb-[1px] whitespace-nowrap ${
+            activeSubTab === 'revisions'
+              ? 'border-[var(--accent)] text-[var(--text)] font-semibold'
+              : 'border-transparent text-[var(--dim)] hover:text-[var(--text)]'
+          }`}
+        >
+          <BookOpen className="h-4 w-4 shrink-0" />
+          <span>Révisions</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeSubTab === 'classement'}
+          onClick={() => onChangeSubTab('classement')}
+          className={`inline-flex min-h-[44px] items-center gap-2 border-b-2 px-3.5 py-2.5 text-[14.5px] font-medium transition-colors -mb-[1px] whitespace-nowrap ${
+            activeSubTab === 'classement'
+              ? 'border-[var(--accent)] text-[var(--text)] font-semibold'
+              : 'border-transparent text-[var(--dim)] hover:text-[var(--text)]'
+          }`}
+        >
+          <Trophy className="h-4 w-4 shrink-0" />
+          <span>Classement</span>
+        </button>
+      </nav>
+
+      {/* ==================== TAB 1: RÉVISIONS (DS + MULTI-THÈMES) ==================== */}
+      {activeSubTab === 'revisions' && (
+        <div
+          className={`mt-4 sm:mt-5 grid grid-cols-1 gap-4 ${
+            subject.sections.length > 1 ? 'lg:grid-cols-2 lg:items-start' : ''
+          }`}
+        >
+          {subject.sections.map((section) => {
+            const selectedThemes = selectedThemesByDs[section.section_ds] ?? [];
+            const examSize = getExamSize(section.section_ds);
+            const effectiveExamCount = Math.min(examSize, section.totalQuestions);
+            const seenPct =
+              section.totalQuestions > 0
+                ? Math.round((section.seenCount / section.totalQuestions) * 100)
+                : 0;
+
+            const matchingCount =
+              selectedThemes.length > 0
+                ? countMatchingThemeQuestions(
+                    allRows,
+                    subject.matiere,
+                    section.section_ds,
+                    selectedThemes
+                  )
+                : section.totalQuestions;
+
             return (
-              <div
-                key={ch.chapitre}
-                className="flex flex-col gap-1.5 py-3 first:pt-1 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
+              <section
+                key={section.section_ds}
+                aria-label={`Section ${section.section_ds}`}
+                className="flex flex-col rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4 sm:p-5"
               >
-                <div>
-                  <p className="text-[14.5px] font-medium text-[var(--text)]">{ch.chapitre}</p>
-                  <p className="text-[12.5px] text-[var(--dim)]">
-                    {ch.coursCount} Cours · {ch.annalesCount} Annales · {ch.seenCount}/{ch.totalQuestions} vues
-                  </p>
-                </div>
-                <div className="flex items-center gap-3 sm:w-52">
-                  <div className="h-[6px] flex-1 overflow-hidden rounded-full bg-[var(--surface-2)]">
-                    <div
-                      className="h-full rounded-full transition-all"
-                      style={{
-                        width: `${pct ?? 0}%`,
-                        backgroundColor:
-                          pct === null
-                            ? 'var(--line)'
-                            : pct >= 70
-                              ? 'var(--good)'
-                              : pct >= 45
-                                ? 'var(--warm)'
-                                : 'var(--bad)',
-                      }}
-                    />
-                  </div>
-                  <span className="w-12 text-right font-mono-code text-[12.5px] text-[var(--dim)] tabular-nums">
-                    {pct !== null ? `${pct}%` : '—'}
+                {/* DS Title + Progress */}
+                <div className="flex items-baseline justify-between gap-2">
+                  <h2 className="text-[19px] font-semibold tracking-[-0.015em] text-[var(--text)]">
+                    {section.section_ds}
+                  </h2>
+                  <span className="font-mono-code text-[12.5px] text-[var(--dim)] tabular-nums">
+                    {section.totalQuestions} question{section.totalQuestions > 1 ? 's' : ''} ·{' '}
+                    {section.seenCount}/{section.totalQuestions} vues
                   </span>
                 </div>
-              </div>
+
+                <div className="mt-2.5 h-[5px] w-full overflow-hidden rounded-full bg-[var(--surface-2)]">
+                  <div
+                    className="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
+                    style={{ width: `${seenPct}%` }}
+                  />
+                </div>
+
+                {/* Primary Action: Mode Examen DS (20 ou 30 questions aléatoires) */}
+                <div className="mt-4 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onLaunchSectionExam(section.section_ds, examSize)}
+                    className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-2.5 text-[14.5px] font-semibold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-hover)] active:scale-[0.99] whitespace-nowrap"
+                    aria-label={`Mode Examen DS — ${section.section_ds} (${effectiveExamCount} questions aléatoires)`}
+                  >
+                    <Shuffle className="h-4 w-4 shrink-0" />
+                    <span>Mode Examen DS ({effectiveExamCount}q)</span>
+                  </button>
+
+                  <div
+                    className="inline-flex h-[48px] shrink-0 items-center rounded-xl border border-[var(--line)] bg-[var(--bg)] p-1"
+                    role="radiogroup"
+                    aria-label={`Nombre de questions pour l'examen ${section.section_ds}`}
+                  >
+                    {([20, 30] as const).map((size) => {
+                      const active = examSize === size;
+                      return (
+                        <button
+                          key={size}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          onClick={() =>
+                            setExamSizeByDs((prev) => ({ ...prev, [section.section_ds]: size }))
+                          }
+                          className={`flex h-full min-w-[40px] items-center justify-center rounded-lg px-2.5 font-mono-code text-[12.5px] font-semibold transition-colors ${
+                            active
+                              ? 'bg-[var(--surface)] text-[var(--accent)] shadow-xs border border-[var(--line)]'
+                              : 'text-[var(--dim)] hover:text-[var(--text)]'
+                          }`}
+                        >
+                          {size}q
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Multi-Select Theme Filters */}
+                <div className="mt-5 pt-4 border-t border-[var(--line)]">
+                  <div className="flex items-center justify-between gap-2 mb-2.5">
+                    <p className="text-[12.5px] font-medium text-[var(--dim)]">
+                      Filtrer par thèmes ({section.themes.length})
+                    </p>
+                    {selectedThemes.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => clearThemes(section.section_ds)}
+                        className="inline-flex items-center gap-1 text-[12.5px] font-medium text-[var(--accent)] hover:underline"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        <span>Effacer ({selectedThemes.length})</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div
+                    className="flex flex-wrap gap-2"
+                    role="group"
+                    aria-label={`Thèmes de ${section.section_ds}`}
+                  >
+                    {section.themes.map((item) => {
+                      const active = selectedThemes.includes(item.theme);
+                      return (
+                        <button
+                          key={item.theme}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => toggleTheme(section.section_ds, item.theme)}
+                          className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13.5px] font-medium transition-colors ${
+                            active
+                              ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)] font-semibold'
+                              : 'border-[var(--line)] bg-[var(--bg)] text-[var(--text)] hover:border-[var(--accent)]'
+                          }`}
+                        >
+                          {active && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />}
+                          <span>{item.theme}</span>
+                          <span className="font-mono-code text-[11.5px] text-[var(--dim)] tabular-nums">
+                            {item.totalQuestions}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Launch Training CTA for Selected Themes (or Full DS) */}
+                  <button
+                    type="button"
+                    onClick={() => onLaunchThemesQuiz(section.section_ds, selectedThemes)}
+                    disabled={matchingCount === 0}
+                    className={`mt-4 inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-[14px] font-semibold transition-colors active:scale-[0.99] disabled:opacity-45 ${
+                      selectedThemes.length > 0
+                        ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)]'
+                        : 'border-[var(--line)] bg-[var(--bg)] text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]'
+                    }`}
+                  >
+                    <Play className="h-4 w-4 shrink-0" />
+                    <span>
+                      {selectedThemes.length > 0
+                        ? `S'entraîner sur la sélection (${matchingCount} question${matchingCount > 1 ? 's' : ''})`
+                        : `Réviser tout le ${section.section_ds} (${section.totalQuestions}q)`}
+                    </span>
+                  </button>
+                </div>
+              </section>
             );
           })}
         </div>
-      </div>
+      )}
+
+      {/* ==================== TAB 2: CLASSEMENT PAR MATIÈRE ==================== */}
+      {activeSubTab === 'classement' && (
+        <div className="mt-4 sm:mt-5">
+          <SubjectLeaderboard
+            matiere={subject.matiere}
+            availableSections={subject.sections.map((s) => s.section_ds)}
+            scores={scores}
+            selectedSection={leaderboardSectionFilter}
+            currentPseudo={currentPseudo}
+            loading={scoresLoading}
+            onChangeSection={onChangeLeaderboardSection}
+            onRefresh={onRefreshScores}
+          />
+        </div>
+      )}
     </section>
   );
 }

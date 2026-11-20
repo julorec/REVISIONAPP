@@ -2,29 +2,24 @@ import type { QuizRow } from '../types/quiz';
 
 /**
  * Curated INSA Rennes ESET 3A seed quiz bank.
- * Used seamlessly as fallback when Supabase table `quizzes` is empty, not yet
- * initialized (PGRST205), or while offline (PWA mode).
- *
- * Showcases all question types:
- * - qcm, vrai_faux, calcul (±5% numeric input & calcul with options), ordre
- * - Multi-language code highlighting: C, VHDL, Assembly (ARM), Python
- * - KaTeX math ($...$ and $$...$$)
- * - Embedded sanitized <svg> schematics
+ * Organized directly by (matiere, section_ds) with multi-theme tags on every question.
+ * Used as seamless fallback when Supabase `quizzes` is empty, not yet deployed, or offline.
  */
 export const SEED_QUIZZES: QuizRow[] = [
   // =========================================================================
-  // 1. PROGRAMMATION C (24 questions -> full 20-question Mode Examen Mélangé)
+  // 1. PROGRAMMATION C — DS 1 & DS 2
   // =========================================================================
   {
-    id: 'seed-c-pointeurs-cours',
+    id: 'seed-c-ds1',
     matiere: 'Programmation C',
-    chapitre: 'Pointeurs & Mémoire (malloc)',
-    type_source: 'Cours',
+    section_ds: 'DS 1',
+    chapitre: 'Banque DS 1',
     origin: 'seed',
     questions: [
       {
         id: 'p1',
         type: 'qcm',
+        themes: ['Pointeurs', 'Tableaux'],
         concept: 'Arithmétique de pointeurs',
         ask: "Qu'affiche ce programme sur une architecture 64 bits où `sizeof(int) == 4` ?",
         code: `#include <stdio.h>
@@ -43,7 +38,8 @@ int main(void) {
       {
         id: 'p2',
         type: 'qcm',
-        concept: 'Allocation dynamique (malloc)',
+        themes: ['Allocation dynamique', 'Pointeurs'],
+        concept: 'malloc & sizeof',
         ask: "Quel est le défaut majeur de cette fonction d'allocation ?",
         code: `#include <stdlib.h>
 
@@ -68,6 +64,7 @@ int *creer_tab(size_t n) {
       {
         id: 'p3',
         type: 'vrai_faux',
+        themes: ['Allocation dynamique'],
         concept: 'Libération mémoire',
         ask: 'En C standard, appeler `free(NULL)` déclenche une erreur de segmentation (segfault).',
         opts: ['Vrai', 'Faux'],
@@ -77,6 +74,7 @@ int *creer_tab(size_t n) {
       {
         id: 'p4',
         type: 'calcul',
+        themes: ['Allocation dynamique', 'Mémoire & Pile/Tas'],
         concept: 'Tas vs Pile · Taille allouée',
         ask: "On exécute l'allocation ci-dessous sur une cible 32 bits (`sizeof(int) = 4`, `sizeof(double) = 8`). Quelle taille totale (en octets) est réservée sur le tas ?",
         code: `double *buf = calloc(16, sizeof(double));`,
@@ -98,18 +96,10 @@ int *creer_tab(size_t n) {
         tolerance: 0.05,
         why: '`calloc(16, sizeof(double))` alloue $16 \\times 8 = 128$ octets contigus sur le tas et les initialise tous à zéro.',
       },
-    ],
-  },
-  {
-    id: 'seed-c-pointeurs-annales',
-    matiere: 'Programmation C',
-    chapitre: 'Pointeurs & Mémoire (malloc)',
-    type_source: 'Annales',
-    origin: 'seed',
-    questions: [
       {
         id: 'pa1',
         type: 'qcm',
+        themes: ['Pointeurs', 'Fonctions'],
         concept: 'Passage par adresse',
         ask: "Qu'affiche ce code issu d'un partiel ESET 3A ?",
         code: `#include <stdio.h>
@@ -133,7 +123,8 @@ int main(void) {
       {
         id: 'pa2',
         type: 'qcm',
-        concept: 'Double pointeur & realloc',
+        themes: ['Allocation dynamique', 'Mémoire & Pile/Tas'],
+        concept: 'Sécurité realloc',
         ask: 'Pourquoi écrit-on `int *tmp = realloc(p, new_size);` au lieu de `p = realloc(p, new_size);` ?',
         code: `int *tmp = realloc(p, n * sizeof(int));
 if (tmp != NULL) {
@@ -152,6 +143,7 @@ if (tmp != NULL) {
       {
         id: 'pa3',
         type: 'qcm',
+        themes: ['Pointeurs', 'Fonctions'],
         concept: 'Pointeur de fonction',
         ask: 'Quelle déclaration définit un pointeur `op` vers une fonction prenant deux `int` et retournant un `int` ?',
         opts: [
@@ -163,19 +155,11 @@ if (tmp != NULL) {
         ans: 0,
         why: 'Les parenthèses autour de `(*op)` sont indispensables : sans elles, `int *op(int, int)` déclare une fonction retournant un `int *`.',
       },
-    ],
-  },
-  {
-    id: 'seed-c-bitwise-cours',
-    matiere: 'Programmation C',
-    chapitre: 'Opérations Bitwise & Masques',
-    type_source: 'Cours',
-    origin: 'seed',
-    questions: [
       {
         id: 'b1',
         type: 'qcm',
-        concept: 'Mise à 1 / mise à 0 de bit',
+        themes: ['Bitwise & Masques'],
+        concept: 'Mise à 0 de bit',
         ask: 'Quelle instruction met le bit $n$ (indexé à partir de 0) du registre `reg` à **0** sans modifier les autres bits ?',
         code: `uint8_t reg = 0xFF;`,
         lang: 'c',
@@ -191,6 +175,7 @@ if (tmp != NULL) {
       {
         id: 'b2',
         type: 'calcul',
+        themes: ['Bitwise & Masques'],
         concept: 'Extraction de champ de bits',
         ask: 'Quelle valeur décimale contient `val` après exécution de ce code ?',
         code: `uint8_t reg = 0xB6; // 1011 0110 en binaire
@@ -204,6 +189,7 @@ uint8_t val = (reg >> 2) & 0x0F;`,
       {
         id: 'b3',
         type: 'qcm',
+        themes: ['Bitwise & Masques'],
         concept: 'XOR & inversion de bit',
         ask: "Qu'affiche ce programme ?",
         code: `#include <stdio.h>
@@ -220,18 +206,10 @@ int main(void) {
         ans: 0,
         why: 'Le masque `(1U << 1) | (1U << 0)` vaut `0x03` (`0000 0011`). Le XOR inverse les deux bits de poids faible : `1010 ^ 0011 = 1001`, soit `0x09`.',
       },
-    ],
-  },
-  {
-    id: 'seed-c-bitwise-annales',
-    matiere: 'Programmation C',
-    chapitre: 'Opérations Bitwise & Masques',
-    type_source: 'Annales',
-    origin: 'seed',
-    questions: [
       {
         id: 'ba1',
         type: 'qcm',
+        themes: ['Bitwise & Masques'],
         concept: 'Test de puissance de 2',
         ask: "Pour un entier non signé `n > 0`, que teste l'expression `(n & (n - 1)) == 0` ?",
         opts: [
@@ -246,6 +224,7 @@ int main(void) {
       {
         id: 'ba2',
         type: 'qcm',
+        themes: ['Bitwise & Masques', 'Pièges C'],
         concept: 'Priorité des opérateurs',
         ask: 'Quel piège classique contient ce test de flag matériel ?',
         code: `if (status & 0x04 == 0) {
@@ -264,6 +243,7 @@ int main(void) {
       {
         id: 'ba3',
         type: 'vrai_faux',
+        themes: ['Bitwise & Masques', 'Pièges C'],
         concept: 'Décalage à gauche signé',
         ask: 'En C, faire `1 << 31` sur un `int` signé 32 bits est un comportement bien défini qui donne `-2147483648`.',
         opts: ['Vrai', 'Faux'],
@@ -273,15 +253,16 @@ int main(void) {
     ],
   },
   {
-    id: 'seed-c-structs-cours',
+    id: 'seed-c-ds2',
     matiere: 'Programmation C',
-    chapitre: 'Structures & Énumérations',
-    type_source: 'Cours',
+    section_ds: 'DS 2',
+    chapitre: 'Banque DS 2',
     origin: 'seed',
     questions: [
       {
         id: 's1',
         type: 'qcm',
+        themes: ['Structures & Unions', 'Pointeurs'],
         concept: 'Opérateur flèche ->',
         ask: "Qu'affiche ce programme manipulant un pointeur vers une structure ?",
         code: `#include <stdio.h>
@@ -309,6 +290,7 @@ int main(void) {
       {
         id: 's2',
         type: 'qcm',
+        themes: ['Structures & Unions', 'Mémoire & Alignement'],
         concept: 'Alignement & padding',
         ask: 'Pourquoi `sizeof(Paquet)` vaut-il généralement **12 octets** et non 6 sur une architecture 32/64 bits ?',
         code: `typedef struct {
@@ -329,6 +311,7 @@ int main(void) {
       {
         id: 's3',
         type: 'qcm',
+        themes: ['Structures & Unions'],
         concept: 'Énumérations (enum)',
         ask: 'Que vaut `ETAT_ERR` dans cette énumération C ?',
         code: `enum Etat {
@@ -342,19 +325,11 @@ int main(void) {
         ans: 0,
         why: "Chaque constante non initialisée vaut la précédente + 1 : `ETAT_IDLE = 1`, `ETAT_RUN = 2`, `ETAT_PAUSE = 10`, donc `ETAT_ERR = 11`.",
       },
-    ],
-  },
-  {
-    id: 'seed-c-structs-annales',
-    matiere: 'Programmation C',
-    chapitre: 'Structures & Énumérations',
-    type_source: 'Annales',
-    origin: 'seed',
-    questions: [
       {
         id: 'sa1',
         type: 'qcm',
-        concept: 'Liste chaînée · Suppression en tête',
+        themes: ['Listes chaînées', 'Allocation dynamique', 'Structures & Unions'],
+        concept: 'Use-after-free',
         ask: 'Quel bug se cache dans cette fonction censée libérer toute une liste chaînée ?',
         code: `typedef struct Noeud {
     int val;
@@ -380,6 +355,7 @@ void liberer(Noeud *tete) {
       {
         id: 'sa2',
         type: 'qcm',
+        themes: ['Structures & Unions', 'Mémoire & Alignement'],
         concept: 'Union en C embarqué',
         ask: "Sur une cible 32 bits, quelle est la taille de cette `union` utilisée pour lire un registre ?",
         code: `typedef union {
@@ -391,19 +367,11 @@ void liberer(Noeud *tete) {
         ans: 0,
         why: "Dans une `union`, tous les champs partagent le même espace mémoire : `sizeof(Reg32)` est la taille du plus grand membre, ici 4 octets.",
       },
-    ],
-  },
-  {
-    id: 'seed-c-io-cours',
-    matiere: 'Programmation C',
-    chapitre: 'Compilation & Chaînes',
-    type_source: 'Cours',
-    origin: 'seed',
-    questions: [
       {
         id: 'io1',
         type: 'ordre',
-        concept: 'Chaîne de compilation GCC',
+        themes: ['Compilation & Préprocesseur'],
+        concept: 'Chaîne GCC',
         ask: "Remettez dans l'ordre chronologique les 4 étapes qui transforment un fichier `.c` en exécutable binaire :",
         ordre_correct: [
           'Préprocesseur (`#include`, `#define` → `.i`)',
@@ -416,7 +384,8 @@ void liberer(Noeud *tete) {
       {
         id: 'io2',
         type: 'qcm',
-        concept: 'Chaînes C & terminateur nul',
+        themes: ['Chaînes & E/S'],
+        concept: 'Terminateur nul',
         ask: "Qu'affiche ce programme ?",
         code: `#include <stdio.h>
 #include <string.h>
@@ -434,6 +403,7 @@ int main(void) {
       {
         id: 'io3',
         type: 'qcm',
+        themes: ['Chaînes & E/S'],
         concept: 'Entrée standard (stdin)',
         ask: "Qu'affiche ce programme avec l'entrée standard ci-dessous ?",
         code: `#include <stdio.h>
@@ -450,18 +420,10 @@ int main(void) {
         ans: 0,
         why: '`scanf` convertit correctement `42` dans `a`, échoue sur `abc` (laisse `b` inchangé à 0) et retourne le nombre de conversions réussies : `1`.',
       },
-    ],
-  },
-  {
-    id: 'seed-c-io-annales',
-    matiere: 'Programmation C',
-    chapitre: 'Compilation & Chaînes',
-    type_source: 'Annales',
-    origin: 'seed',
-    questions: [
       {
         id: 'ioa1',
         type: 'qcm',
+        themes: ['Chaînes & E/S'],
         concept: 'Comparaison de chaînes',
         ask: 'Que retourne `strcmp("insa", "insa")` ?',
         opts: ['0', '1', '-1', '4'],
@@ -471,6 +433,7 @@ int main(void) {
       {
         id: 'ioa2',
         type: 'qcm',
+        themes: ['Compilation & Préprocesseur'],
         concept: 'Macro préprocesseur',
         ask: "Qu'affiche ce programme à cause de la macro non parenthésée ?",
         code: `#include <stdio.h>
@@ -488,7 +451,8 @@ int main(void) {
       {
         id: 'ioa3',
         type: 'vrai_faux',
-        concept: 'Static en variable locale',
+        themes: ['Compilation & Préprocesseur', 'Mémoire & Alignement'],
+        concept: 'Variable static',
         ask: "Une variable locale déclarée `static` dans une fonction conserve sa valeur d'un appel à l'autre.",
         opts: ['Vrai', 'Faux'],
         ans: 0,
@@ -498,19 +462,20 @@ int main(void) {
   },
 
   // =========================================================================
-  // 2. TRAITEMENT DU SIGNAL (KaTeX + Calcul ±5% + SVG + Python + Ordre)
+  // 2. TRAITEMENT DU SIGNAL — DS 1 & DS 2
   // =========================================================================
   {
-    id: 'seed-ts-fourier-cours',
+    id: 'seed-ts-ds1',
     matiere: 'Traitement du Signal',
-    chapitre: 'Transformée de Fourier & Filtres',
-    type_source: 'Cours',
+    section_ds: 'DS 1',
+    chapitre: 'Banque DS 1',
     origin: 'seed',
     questions: [
       {
         id: 'ts1',
         type: 'calcul',
-        concept: 'Filtre passe-bas RC · Fréquence de coupure',
+        themes: ['Filtres analogiques', 'Bode & Décibels'],
+        concept: 'Filtre passe-bas RC',
         ask: "On considère le filtre passe-bas RC ci-dessous avec $R = 1\\,\\text{k}\\Omega$ et $C = 100\\,\\text{nF}$. Calculez sa fréquence de coupure à $-3\\,\\text{dB}$, sachant que $$f_c = \\frac{1}{2\\pi R C}$$",
         svg: `<svg viewBox="0 0 400 132" class="w-full max-w-md mx-auto">
   <line x1="34" y1="38" x2="104" y2="38" stroke="currentColor" stroke-width="2"/>
@@ -539,7 +504,8 @@ int main(void) {
       {
         id: 'ts2',
         type: 'qcm',
-        concept: 'Porte rectangulaire & sinus cardinal',
+        themes: ['Transformée de Fourier'],
+        concept: 'Porte rectangulaire & sinc',
         ask: 'Quelle est la transformée de Fourier de la fonction porte $\\Pi_T(t)$ de durée $T$ centrée en 0 ?',
         opts: [
           '$T\\,\\text{sinc}(f T)$',
@@ -553,7 +519,8 @@ int main(void) {
       {
         id: 'ts3',
         type: 'qcm',
-        concept: 'Analyse spectrale Python / NumPy',
+        themes: ['Transformée de Fourier', 'FFT & Python'],
+        concept: 'Résolution fréquentielle',
         ask: 'Avec ce script Python, quelle résolution fréquentielle $\\Delta f$ sépare deux raies consécutives de la FFT ?',
         code: `import numpy as np
 
@@ -575,7 +542,8 @@ freqs = np.fft.rfftfreq(N, d=1/fs)`,
       {
         id: 'ts4',
         type: 'calcul',
-        concept: 'Gain en décibels (calcul avec options)',
+        themes: ['Bode & Décibels', 'Filtres analogiques'],
+        concept: 'Gain en décibels',
         ask: 'Un filtre atténue une amplitude par un facteur $0{,}1$ ($|H(f)| = 0{,}1$). Quel est son gain en décibels $G_{\\text{dB}} = 20\\log_{10}|H(f)|$ ?',
         opts: ['$-20\\,\\text{dB}$', '$-10\\,\\text{dB}$', '$-3\\,\\text{dB}$', '$-40\\,\\text{dB}$'],
         ans: 0,
@@ -585,16 +553,17 @@ freqs = np.fft.rfftfreq(N, d=1/fs)`,
     ],
   },
   {
-    id: 'seed-ts-echantillonnage-annales',
+    id: 'seed-ts-ds2',
     matiere: 'Traitement du Signal',
-    chapitre: 'Échantillonnage & Transformée en Z',
-    type_source: 'Annales',
+    section_ds: 'DS 2',
+    chapitre: 'Banque DS 2',
     origin: 'seed',
     questions: [
       {
         id: 'tsa1',
         type: 'ordre',
-        concept: 'Chaîne d’acquisition numérique',
+        themes: ['Échantillonnage & Shannon', 'Chaîne numérique'],
+        concept: 'Chaîne d’acquisition',
         ask: "Ordonnez correctement les 4 blocs d'une chaîne d'acquisition numérique d'un signal analogique :",
         ordre_correct: [
           'Filtrage analogique anti-repliement (passe-bas)',
@@ -607,7 +576,8 @@ freqs = np.fft.rfftfreq(N, d=1/fs)`,
       {
         id: 'tsa2',
         type: 'calcul',
-        concept: 'Théorème de Shannon-Nyquist',
+        themes: ['Échantillonnage & Shannon'],
+        concept: 'Critère de Nyquist',
         ask: "Un signal modulé occupe la bande $[0; 12{,}5\\,\\text{kHz}]$. Quelle est la fréquence d'échantillonnage minimale $f_{e,\\min}$ (en kHz) pour éviter tout repliement de spectre ?",
         reponse_numerique: 25,
         unite: 'kHz',
@@ -617,7 +587,8 @@ freqs = np.fft.rfftfreq(N, d=1/fs)`,
       {
         id: 'tsa3',
         type: 'vrai_faux',
-        concept: 'Stabilité BIBO en Z',
+        themes: ['Transformée en Z', 'Filtres numériques'],
+        concept: 'Stabilité BIBO',
         ask: "Un filtre numérique causal de fonction de transfert $H(z)$ est stable au sens BIBO si et seulement si tous ses pôles vérifient $|p_k| < 1$.",
         opts: ['Vrai', 'Faux'],
         ans: 0,
@@ -626,6 +597,7 @@ freqs = np.fft.rfftfreq(N, d=1/fs)`,
       {
         id: 'tsa4',
         type: 'qcm',
+        themes: ['Filtres numériques', 'Transformée en Z'],
         concept: 'Filtre RIF (FIR)',
         ask: 'Quelle propriété caractérise systématiquement un filtre numérique RIF (à réponse impulsionnelle finie) ?',
         opts: [
@@ -641,19 +613,20 @@ freqs = np.fft.rfftfreq(N, d=1/fs)`,
   },
 
   // =========================================================================
-  // 3. ÉLECTRONIQUE NUMÉRIQUE & VHDL (VHDL + SVG + Calcul ±5% + Ordre)
+  // 3. ÉLECTRONIQUE NUMÉRIQUE & VHDL — DS 1 & DS 2
   // =========================================================================
   {
-    id: 'seed-vhdl-cours',
+    id: 'seed-vhdl-ds1',
     matiere: 'Électronique Numérique & VHDL',
-    chapitre: 'VHDL & Logique Séquentielle',
-    type_source: 'Cours',
+    section_ds: 'DS 1',
+    chapitre: 'Banque DS 1',
     origin: 'seed',
     questions: [
       {
         id: 'v1',
         type: 'qcm',
-        concept: 'Processus synchrone VHDL',
+        themes: ['VHDL', 'Logique séquentielle'],
+        concept: 'Processus synchrone',
         ask: 'Quel matériel est inféré par ce processus VHDL lors de la synthèse FPGA ?',
         code: `-- Processus séquentiel
 process(clk, rst_n)
@@ -679,7 +652,8 @@ end process;`,
       {
         id: 'v2',
         type: 'calcul',
-        concept: 'Timing synchrone · Fréquence maximale',
+        themes: ['Timing & Horloge', 'Logique séquentielle'],
+        concept: 'Chemin critique',
         ask: "Sur le chemin critique entre deux bascules D illustré ci-dessous, on donne $t_{cq} = 1{,}5\\,\\text{ns}$, $t_{\\text{comb}} = 6{,}5\\,\\text{ns}$ et $t_{\\text{su}} = 2{,}0\\,\\text{ns}$ (skew nul). Calculez la fréquence maximale d'horloge $f_{\\max}$ en MHz.",
         svg: `<svg viewBox="0 0 380 120" class="w-full max-w-md mx-auto">
   <rect x="16" y="22" width="64" height="72" rx="5" fill="var(--surface-2)" stroke="currentColor" stroke-width="1.8"/>
@@ -705,7 +679,8 @@ end process;`,
       {
         id: 'v3',
         type: 'vrai_faux',
-        concept: 'Signal vs Variable en VHDL',
+        themes: ['VHDL'],
+        concept: 'Signal vs Variable',
         ask: "Dans un `process` VHDL, l'affectation d'un `signal` via `<=` prend effet immédiatement à la ligne suivante du même processus.",
         opts: ['Vrai', 'Faux'],
         ans: 1,
@@ -714,16 +689,17 @@ end process;`,
     ],
   },
   {
-    id: 'seed-vhdl-annales',
+    id: 'seed-vhdl-ds2',
     matiere: 'Électronique Numérique & VHDL',
-    chapitre: 'Synthèse FPGA & Codage Binaire',
-    type_source: 'Annales',
+    section_ds: 'DS 2',
+    chapitre: 'Banque DS 2',
     origin: 'seed',
     questions: [
       {
         id: 'va1',
         type: 'ordre',
-        concept: 'Flot de conception FPGA',
+        themes: ['Synthèse FPGA', 'VHDL'],
+        concept: 'Flot FPGA',
         ask: "Remettez dans l'ordre les étapes du flot de conception FPGA jusqu'au téléchargement sur la carte :",
         ordre_correct: [
           'Description RTL (VHDL) & simulation fonctionnelle',
@@ -736,6 +712,7 @@ end process;`,
       {
         id: 'va2',
         type: 'calcul',
+        themes: ['Codage binaire'],
         concept: 'Complément à 2',
         ask: 'Quelle valeur décimale signée représente l’octet `1111_0110` codé en complément à 2 sur 8 bits ?',
         reponse_numerique: -10,
@@ -746,6 +723,7 @@ end process;`,
       {
         id: 'va3',
         type: 'qcm',
+        themes: ['VHDL', 'Synthèse FPGA'],
         concept: 'Anti-latch combinatoire',
         ask: 'Dans un `process` combinatoire VHDL, comment évite-t-on la synthèse involontaire d’un verrou (latch) ?',
         opts: [
@@ -761,19 +739,20 @@ end process;`,
   },
 
   // =========================================================================
-  // 4. ARCHITECTURE & ASSEMBLEUR (Assembly ARM + Ordre + Calcul ±5%)
+  // 4. ARCHITECTURE & ASSEMBLEUR — DS 1 & DS 2
   // =========================================================================
   {
-    id: 'seed-asm-cours',
+    id: 'seed-asm-ds1',
     matiere: 'Architecture & Assembleur',
-    chapitre: 'ARM Cortex-M & Instructions',
-    type_source: 'Cours',
+    section_ds: 'DS 1',
+    chapitre: 'Banque DS 1',
     origin: 'seed',
     questions: [
       {
         id: 'a1',
         type: 'calcul',
-        concept: 'Décalage logique & addition ARM',
+        themes: ['Instructions ARM', 'Décalages & UAL'],
+        concept: 'LSL & ADD',
         ask: 'Quelle valeur décimale contient le registre `r1` après exécution de cette séquence ARM Cortex-M ?',
         code: `    MOV r0, #6          ; r0 = 6
     LSL r1, r0, #2      ; décalage gauche de 2 bits
@@ -787,7 +766,8 @@ end process;`,
       {
         id: 'a2',
         type: 'qcm',
-        concept: 'Registres spéciaux ARM',
+        themes: ['Registres & Pile', 'Instructions ARM'],
+        concept: 'Link Register (LR)',
         ask: 'Quel est le rôle du registre `LR` (`r14`) lors d’un appel de sous-programme via `BL ma_fonction` ?',
         code: `main:
     BL calcul_crc
@@ -805,7 +785,8 @@ end process;`,
       {
         id: 'a3',
         type: 'ordre',
-        concept: 'Pipeline RISC 5 étages',
+        themes: ['Pipeline RISC'],
+        concept: '5 étages RISC',
         ask: "Remettez dans l'ordre les 5 étages classiques d'un pipeline RISC pour le traitement d'une instruction :",
         ordre_correct: [
           'IF — Fetch (chargement de l’instruction)',
@@ -819,16 +800,17 @@ end process;`,
     ],
   },
   {
-    id: 'seed-asm-annales',
+    id: 'seed-asm-ds2',
     matiere: 'Architecture & Assembleur',
-    chapitre: 'Boucles, Pile & Mémoire',
-    type_source: 'Annales',
+    section_ds: 'DS 2',
+    chapitre: 'Banque DS 2',
     origin: 'seed',
     questions: [
       {
         id: 'aa1',
         type: 'qcm',
-        concept: 'Boucle & drapeaux NZCV',
+        themes: ['Boucles & Drapeaux', 'Instructions ARM'],
+        concept: 'Drapeaux NZCV',
         ask: 'Combien de fois le corps de la boucle `loop:` est-il exécuté ?',
         code: `    MOV r0, #4
 loop:
@@ -842,7 +824,8 @@ loop:
       {
         id: 'aa2',
         type: 'vrai_faux',
-        concept: 'Architecture Load/Store',
+        themes: ['Architecture Load/Store', 'Registres & Pile'],
+        concept: 'Accès mémoire RISC',
         ask: "En assembleur ARM (architecture Load/Store), l'instruction `ADD` peut directement additionner deux valeurs stockées en mémoire RAM sans passer par des registres.",
         opts: ['Vrai', 'Faux'],
         ans: 1,

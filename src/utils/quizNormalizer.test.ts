@@ -1,17 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeQuestionList, normalizeSourceType } from './quizNormalizer';
+import { normalizeQuestionList, normalizeThemes } from './quizNormalizer';
 
-test('normalizeSourceType classifies Cours vs Annales', () => {
-  assert.equal(normalizeSourceType('Cours'), 'Cours');
-  assert.equal(normalizeSourceType('annales 2025'), 'Annales');
-  assert.equal(normalizeSourceType('Partiel DS'), 'Annales');
+test('normalizeThemes parses arrays, comma strings, deduplicates case-insensitively, and falls back cleanly', () => {
+  assert.deepEqual(normalizeThemes(['Pointeurs', 'Allocation dynamique', 'pointeurs']), [
+    'Pointeurs',
+    'Allocation dynamique',
+  ]);
+  assert.deepEqual(normalizeThemes('Bitwise, Registres ; Bitwise'), ['Bitwise', 'Registres']);
+  assert.deepEqual(normalizeThemes(undefined, 'Filtre RC'), ['Filtre RC']);
+  assert.deepEqual(normalizeThemes(undefined, undefined), ['Général']);
 });
 
-test('normalizeQuestionList handles qcm, vrai_faux, calcul (numeric & options), ordre, svg, and lang', () => {
+test('normalizeQuestionList handles multi-theme qcm, vrai_faux, calcul (numeric & options), ordre, svg, and lang', () => {
   const payload = JSON.stringify([
     {
       type: 'qcm',
+      themes: ['Bitwise', 'Pièges C'],
       question: 'Que vaut `x` ?',
       code: 'int x = 1 << 3;',
       options: ['4', '8', '16'],
@@ -20,12 +25,14 @@ test('normalizeQuestionList handles qcm, vrai_faux, calcul (numeric & options), 
     },
     {
       type: 'vrai_faux',
+      themes: ['Allocation dynamique', 'Pointeurs'],
       question: 'free(NULL) provoque un segfault.',
       reponse: false,
       explication: 'La norme C garantit que free(NULL) est sans effet.',
     },
     {
       type: 'calcul',
+      themes: ['Filtre RC', 'Bode'],
       question: 'Calculez $f_c$ pour $R=1\\,\\text{k}\\Omega$, $C=100\\,\\text{nF}$.',
       reponse_numerique: 1591.5,
       unite: 'Hz',
@@ -35,6 +42,7 @@ test('normalizeQuestionList handles qcm, vrai_faux, calcul (numeric & options), 
     {
       type: 'calcul',
       question: 'Calcul avec options explicites',
+      concept: 'Décibels',
       options: ['10 Hz', '20 Hz', '40 Hz'],
       ans: 1,
       unite: 'Hz',
@@ -42,6 +50,7 @@ test('normalizeQuestionList handles qcm, vrai_faux, calcul (numeric & options), 
     },
     {
       type: 'ordre',
+      themes: ['Compilation'],
       question: 'Ordonnez les étapes de compilation C :',
       ordre_correct: ['Préprocesseur', 'Compilateur', 'Assembleur', 'Éditeur de liens'],
       why: 'Chaîne GCC classique.',
@@ -53,24 +62,29 @@ test('normalizeQuestionList handles qcm, vrai_faux, calcul (numeric & options), 
   assert.equal(res.questions.length, 5);
 
   assert.equal(res.questions[0].type, 'qcm');
+  assert.deepEqual(res.questions[0].themes, ['Bitwise', 'Pièges C']);
   assert.equal(res.questions[0].ans, 1);
   assert.equal(res.questions[0].lang, 'c');
 
   assert.equal(res.questions[1].type, 'vrai_faux');
+  assert.deepEqual(res.questions[1].themes, ['Allocation dynamique', 'Pointeurs']);
   assert.deepEqual(res.questions[1].opts, ['Vrai', 'Faux']);
   assert.equal(res.questions[1].ans, 1);
 
   assert.equal(res.questions[2].type, 'calcul');
+  assert.deepEqual(res.questions[2].themes, ['Filtre RC', 'Bode']);
   assert.equal(res.questions[2].reponse_numerique, 1591.5);
   assert.equal(res.questions[2].unite, 'Hz');
   assert.equal(res.questions[2].tolerance, 0.05);
   assert.ok(res.questions[2].svg?.includes('<svg'));
 
   assert.equal(res.questions[3].type, 'calcul');
+  assert.deepEqual(res.questions[3].themes, ['Décibels']);
   assert.deepEqual(res.questions[3].opts, ['10 Hz', '20 Hz', '40 Hz']);
   assert.equal(res.questions[3].ans, 1);
 
   assert.equal(res.questions[4].type, 'ordre');
+  assert.deepEqual(res.questions[4].themes, ['Compilation']);
   assert.deepEqual(res.questions[4].ordre_correct, [
     'Préprocesseur',
     'Compilateur',

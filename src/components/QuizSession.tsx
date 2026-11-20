@@ -311,8 +311,7 @@ export function QuizSession({
       <article className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5 sm:p-6">
         {/* Kicker metadata (zero pills — clean uppercase mono separated by middots) */}
         <p className="font-mono-code text-[11.5px] font-medium uppercase tracking-[0.06em] text-[var(--warm)]">
-          {current.chapitre} · {current.type_source} · {getTypeLabel(current)}
-          {current.concept ? ` · ${current.concept}` : ''}
+          {current.section_ds} · {current.themes.join(' / ')} · {getTypeLabel(current)}
         </p>
 
         {/* Prompt */}

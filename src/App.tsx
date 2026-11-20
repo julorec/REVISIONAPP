@@ -1,23 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminImportModal } from './components/AdminImportModal';
-import { CatalogueHome } from './components/CatalogueHome';
 import { Header } from './components/Header';
+import { MobileBottomNav } from './components/MobileBottomNav';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { PseudoModal } from './components/PseudoModal';
 import { QuizResults } from './components/QuizResults';
 import { QuizSession } from './components/QuizSession';
-import { SubjectWorkspace } from './components/SubjectWorkspace';
+import { SubjectTabsBar } from './components/SubjectTabsBar';
+import { SubjectWorkspace, type SubjectSubTab } from './components/SubjectWorkspace';
 import { useTheme } from './hooks/useTheme';
 import {
   fetchQuizzes,
-  loadLocalQuizzes,
+  fetchScores,
   loadProgress,
+  loadStudentPseudo,
+  recordQuizScore,
   saveProgress,
+  saveStudentPseudo,
 } from './lib/supabase';
 import type {
+  ExamSize,
   HydratedQuestion,
   ProgressMap,
-  QuizMode,
   QuizRow,
+  ScoreEntry,
   UserAnswer,
 } from './types/quiz';
 import {
@@ -28,12 +34,13 @@ import {
   shuffleArray,
 } from './utils/quizEngine';
 
-type AppView = 'home' | 'subject' | 'quiz' | 'results';
+type AppView = 'subject' | 'quiz' | 'results';
 
 interface ActiveSession {
   key: number;
   title: string;
   matiere: string;
+  sectionDs: string;
   questions: HydratedQuestion[];
   answers: Array<UserAnswer | null>;
 }
@@ -41,59 +48,79 @@ interface ActiveSession {
 export default function App() {
   const { preference: theme, setPreference: setTheme } = useTheme();
 
+  // Student pseudo persisted in localStorage; asked on first launch if absent
+  const [pseudo, setPseudo] = useState<string>(() => loadStudentPseudo());
+  const [pseudoModalOpen, setPseudoModalOpen] = useState<boolean>(() => !loadStudentPseudo());
+
   const [rows, setRows] = useState<QuizRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [scores, setScores] = useState<ScoreEntry[]>([]);
+  const [scoresLoading, setScoresLoading] = useState(false);
   const [progress, setProgress] = useState<ProgressMap>(() => loadProgress());
 
-  const [view, setView] = useState<AppView>('home');
+  const [view, setView] = useState<AppView>('subject');
   const [selectedMatiere, setSelectedMatiere] = useState<string>('');
-  const [selectedChapter, setSelectedChapter] = useState<string>('all');
-  const [selectedMode, setSelectedMode] = useState<QuizMode>('all');
+  const [activeSubTab, setActiveSubTab] = useState<SubjectSubTab>('revisions');
+  const [leaderboardSectionFilter, setLeaderboardSectionFilter] = useState<string>('all');
+
   const [session, setSession] = useState<ActiveSession | null>(null);
+  const [scoreSavedStatus, setScoreSavedStatus] = useState<'saving' | 'supabase' | 'local' | null>(
+    null
+  );
   const [adminOpen, setAdminOpen] = useState(false);
 
-  const loadData = useCallback(async () => {
+  const loadQuizzes = useCallback(async () => {
     setLoading(true);
     const result = await fetchQuizzes();
     setRows(result.rows);
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    void loadData();
-  }, [loadData]);
+  const loadAllScores = useCallback(async () => {
+    setScoresLoading(true);
+    const result = await fetchScores();
+    setScores(result.scores);
+    setScoresLoading(false);
+  }, []);
 
-  const subjects = useMemo(
-    () => buildSubjectSummaries(rows, progress),
-    [rows, progress]
-  );
+  useEffect(() => {
+    void loadQuizzes();
+    void loadAllScores();
+  }, [loadQuizzes, loadAllScores]);
+
+  const subjects = useMemo(() => buildSubjectSummaries(rows, progress), [rows, progress]);
+
+  useEffect(() => {
+    if (!selectedMatiere && subjects.length > 0) {
+      setSelectedMatiere(subjects[0].matiere);
+    }
+  }, [subjects, selectedMatiere]);
 
   const currentSubject = useMemo(
-    () => subjects.find((s) => s.matiere === selectedMatiere) ?? null,
+    () => subjects.find((s) => s.matiere === selectedMatiere) ?? subjects[0] ?? null,
     [subjects, selectedMatiere]
   );
 
-  const matchingQuestions = useMemo(() => {
-    if (!selectedMatiere) return [];
-    return selectQuizQuestions(rows, {
-      matiere: selectedMatiere,
-      chapitre: selectedChapter,
-      mode: selectedMode,
-    });
-  }, [rows, selectedMatiere, selectedChapter, selectedMode]);
-
   const missedForCurrentSubject = useMemo(() => {
-    if (!selectedMatiere) return [];
-    return getMissedQuestionsForSubject(rows, selectedMatiere, progress);
-  }, [rows, selectedMatiere, progress]);
+    if (!currentSubject) return [];
+    return getMissedQuestionsForSubject(rows, currentSubject.matiere, progress);
+  }, [rows, currentSubject, progress]);
+
+  const handleSavePseudo = (nextPseudo: string) => {
+    const saved = saveStudentPseudo(nextPseudo);
+    setPseudo(saved);
+    setPseudoModalOpen(false);
+  };
 
   const startSession = useCallback(
-    (matiere: string, title: string, questions: HydratedQuestion[]) => {
+    (matiere: string, sectionDs: string, title: string, questions: HydratedQuestion[]) => {
       if (questions.length === 0) return;
+      setScoreSavedStatus(null);
       setSession({
         key: Date.now(),
         title,
         matiere,
+        sectionDs,
         questions,
         answers: questions.map(() => null),
       });
@@ -103,49 +130,48 @@ export default function App() {
     []
   );
 
-  const handleSelectSubject = (matiere: string) => {
+  const handleSelectMatiere = (matiere: string) => {
     setSelectedMatiere(matiere);
-    setSelectedChapter('all');
-    setSelectedMode('all');
+    setLeaderboardSectionFilter('all');
     setView('subject');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleQuickExam = (matiere: string) => {
-    setSelectedMatiere(matiere);
-    setSelectedChapter('all');
-    setSelectedMode('exam');
-    const examQuestions = selectQuizQuestions(rows, {
-      matiere,
-      chapitre: 'all',
+  const handleChangeSubTab = (tab: SubjectSubTab) => {
+    setActiveSubTab(tab);
+    if (view !== 'subject') setView('subject');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleLaunchSectionExam = (sectionDs: string, examSize: ExamSize) => {
+    if (!currentSubject) return;
+    const picked = selectQuizQuestions(rows, {
+      matiere: currentSubject.matiere,
+      section_ds: sectionDs,
       mode: 'exam',
+      examSize,
     });
     startSession(
-      matiere,
-      `${matiere} · Examen Mélangé (${examQuestions.length}q)`,
-      examQuestions
+      currentSubject.matiere,
+      sectionDs,
+      `${sectionDs} · Examen (${picked.length}q)`,
+      picked
     );
   };
 
-  const handleLaunchFilteredQuiz = () => {
-    if (!selectedMatiere) return;
+  const handleLaunchThemesQuiz = (sectionDs: string, selectedThemes: string[]) => {
+    if (!currentSubject) return;
     const picked = selectQuizQuestions(rows, {
-      matiere: selectedMatiere,
-      chapitre: selectedChapter,
-      mode: selectedMode,
+      matiere: currentSubject.matiere,
+      section_ds: sectionDs,
+      themes: selectedThemes,
+      mode: 'themes',
     });
-    const suffix =
-      selectedMode === 'exam'
-        ? `Examen Mélangé (${picked.length}q)`
-        : selectedChapter !== 'all'
-          ? selectedMode === 'all'
-            ? selectedChapter
-            : `${selectedChapter} · ${selectedMode}`
-          : selectedMode === 'all'
-            ? 'Toutes les questions'
-            : selectedMode;
-
-    startSession(selectedMatiere, `${selectedMatiere} · ${suffix}`, picked);
+    const label =
+      selectedThemes.length > 0
+        ? `${sectionDs} · ${selectedThemes.slice(0, 2).join(' + ')}${selectedThemes.length > 2 ? ` (+${selectedThemes.length - 2})` : ''}`
+        : `${sectionDs} · Révision complète`;
+    startSession(currentSubject.matiere, sectionDs, label, picked);
   };
 
   const handleRecordAnswer = useCallback((questionId: string, isCorrect: boolean) => {
@@ -165,19 +191,40 @@ export default function App() {
     });
   }, []);
 
-  const handleFinishQuiz = useCallback((answers: Array<UserAnswer | null>) => {
-    setSession((prev) => (prev ? { ...prev, answers } : null));
-    setView('results');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
+  const handleFinishQuiz = useCallback(
+    (answers: Array<UserAnswer | null>) => {
+      if (!session) return;
+      const completed: ActiveSession = { ...session, answers };
+      setSession(completed);
+      setView('results');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+      const summary = computeQuizResult(completed.questions, answers);
+      setScoreSavedStatus('saving');
+      void recordQuizScore({
+        pseudo: pseudo || 'Étudiant ESET',
+        matiere: completed.matiere,
+        section_ds: completed.sectionDs,
+        points: summary.points,
+        bonnes_reponses: summary.score,
+        total_questions: summary.total,
+      }).then((res) => {
+        setScoreSavedStatus(res.persistedTo);
+        setScores((prev) => [res.entry, ...prev]);
+      });
+    },
+    [session, pseudo]
+  );
 
   const handleReplayMissed = useCallback(
     (missed: HydratedQuestion[]) => {
       if (missed.length === 0) return;
       const matiere = missed[0].matiere;
+      const sectionDs = missed[0].section_ds || 'DS 1';
       startSession(
         matiere,
-        `${matiere} · Rejouer mes erreurs (${missed.length}q)`,
+        sectionDs,
+        `Rejouer mes erreurs (${missed.length}q)`,
         shuffleArray(missed)
       );
     },
@@ -186,7 +233,12 @@ export default function App() {
 
   const handleRestartSame = useCallback(() => {
     if (!session) return;
-    startSession(session.matiere, session.title, shuffleArray(session.questions));
+    startSession(
+      session.matiere,
+      session.sectionDs,
+      session.title,
+      shuffleArray(session.questions)
+    );
   }, [session, startSession]);
 
   const quizSummary = useMemo(() => {
@@ -194,44 +246,71 @@ export default function App() {
     return computeQuizResult(session.questions, session.answers);
   }, [session, view]);
 
-  const localQuizzes = useMemo(() => loadLocalQuizzes(), [rows]);
-
   return (
     <div className="min-h-dvh flex flex-col bg-[var(--bg)] text-[var(--text)]">
       <OfflineIndicator />
       <Header
         theme={theme}
+        pseudo={pseudo}
         onThemeChange={setTheme}
         onGoHome={() => {
-          setView('home');
+          setActiveSubTab('revisions');
+          setView('subject');
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
+        onEditPseudo={() => setPseudoModalOpen(true)}
         onOpenAdmin={() => setAdminOpen(true)}
       />
 
+      {/* Top Matières Tab Navigation (always available outside active quiz) */}
+      {view !== 'quiz' && subjects.length > 0 && (
+        <SubjectTabsBar
+          subjects={subjects}
+          activeMatiere={currentSubject?.matiere ?? null}
+          loading={loading}
+          onSelectMatiere={handleSelectMatiere}
+          onRefresh={() => {
+            void loadQuizzes();
+            void loadAllScores();
+          }}
+        />
+      )}
+
       <main className="flex-1">
-        {view === 'home' && (
-          <CatalogueHome
-            subjects={subjects}
-            loading={loading}
-            onSelectSubject={handleSelectSubject}
-            onQuickExam={handleQuickExam}
-            onRefresh={() => void loadData()}
-          />
+        {loading && !currentSubject && (
+          <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {[1, 2].map((i) => (
+              <div
+                key={i}
+                className="h-56 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 animate-pulse"
+              >
+                <div className="h-5 w-24 rounded bg-[var(--surface-2)]" />
+                <div className="mt-4 h-12 w-full rounded-xl bg-[var(--surface-2)]" />
+                <div className="mt-6 flex gap-2">
+                  <div className="h-9 w-24 rounded-xl bg-[var(--surface-2)]" />
+                  <div className="h-9 w-28 rounded-xl bg-[var(--surface-2)]" />
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
         {view === 'subject' && currentSubject && (
           <SubjectWorkspace
             subject={currentSubject}
-            selectedChapter={selectedChapter}
-            selectedMode={selectedMode}
-            matchingCount={matchingQuestions.length}
+            allRows={rows}
+            activeSubTab={activeSubTab}
             missedQuestions={missedForCurrentSubject}
-            onChangeChapter={setSelectedChapter}
-            onChangeMode={setSelectedMode}
-            onStartQuiz={handleLaunchFilteredQuiz}
+            scores={scores}
+            scoresLoading={scoresLoading}
+            currentPseudo={pseudo}
+            leaderboardSectionFilter={leaderboardSectionFilter}
+            onChangeSubTab={handleChangeSubTab}
+            onChangeLeaderboardSection={setLeaderboardSectionFilter}
+            onRefreshScores={() => void loadAllScores()}
+            onLaunchSectionExam={handleLaunchSectionExam}
+            onLaunchThemesQuiz={handleLaunchThemesQuiz}
             onReplayMissed={() => handleReplayMissed(missedForCurrentSubject)}
-            onBack={() => setView('home')}
           />
         )}
 
@@ -242,37 +321,57 @@ export default function App() {
             questions={session.questions}
             onRecordAnswer={handleRecordAnswer}
             onFinish={handleFinishQuiz}
-            onExit={() => setView(currentSubject ? 'subject' : 'home')}
+            onExit={() => setView('subject')}
           />
         )}
 
         {view === 'results' && session && quizSummary && (
           <QuizResults
             title={session.title}
+            sectionDs={session.sectionDs}
+            pseudo={pseudo}
+            scoreSavedStatus={scoreSavedStatus}
             questions={session.questions}
             answers={session.answers}
             summary={quizSummary}
             onReplayMissed={handleReplayMissed}
             onRestartSame={handleRestartSame}
-            onBackToSubject={() => {
-              if (session.matiere) {
-                setSelectedMatiere(session.matiere);
-                setView('subject');
-              } else {
-                setView('home');
-              }
+            onOpenLeaderboard={() => {
+              setSelectedMatiere(session.matiere);
+              setActiveSubTab('classement');
+              setLeaderboardSectionFilter('all');
+              setView('subject');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            onBackToCatalogue={() => setView('home')}
+            onBackToSubject={() => {
+              setSelectedMatiere(session.matiere);
+              setActiveSubTab('revisions');
+              setView('subject');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
           />
         )}
       </main>
 
+      {/* Thumb-Zone Mobile Bottom Tab Bar (Révisions | Classement) */}
+      {view !== 'quiz' && (
+        <MobileBottomNav activeSubTab={activeSubTab} onChangeSubTab={handleChangeSubTab} />
+      )}
+
+      <PseudoModal
+        open={pseudoModalOpen}
+        initialPseudo={pseudo}
+        required={!pseudo}
+        onSave={handleSavePseudo}
+        onClose={() => setPseudoModalOpen(false)}
+      />
+
       <AdminImportModal
         open={adminOpen}
         existingSubjects={subjects.map((s) => s.matiere)}
-        localQuizzes={localQuizzes}
+        allQuizzes={rows}
         onClose={() => setAdminOpen(false)}
-        onImported={loadData}
+        onImported={loadQuizzes}
       />
     </div>
   );

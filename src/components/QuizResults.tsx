@@ -1,31 +1,37 @@
 import { useState } from 'react';
-import { ArrowLeft, Check, RotateCcw, Shuffle, X } from 'lucide-react';
+import { ArrowLeft, Check, RotateCcw, Shuffle, Trophy, X } from 'lucide-react';
 import type { HydratedQuestion, QuizResultSummary, UserAnswer } from '../types/quiz';
 import { evaluateAnswer, isChoiceQuestion } from '../utils/quizEngine';
 import { CodeBlock, RichContent, SafeSvgBlock } from './RichContent';
 
 interface QuizResultsProps {
   title: string;
+  sectionDs: string;
+  pseudo: string;
+  scoreSavedStatus: 'saving' | 'supabase' | 'local' | null;
   questions: HydratedQuestion[];
   answers: Array<UserAnswer | null>;
   summary: QuizResultSummary;
   onReplayMissed: (missed: HydratedQuestion[]) => void;
   onRestartSame: () => void;
+  onOpenLeaderboard: () => void;
   onBackToSubject: () => void;
-  onBackToCatalogue: () => void;
 }
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
 
 export function QuizResults({
   title,
+  sectionDs,
+  pseudo,
+  scoreSavedStatus,
   questions,
   answers,
   summary,
   onReplayMissed,
   onRestartSame,
+  onOpenLeaderboard,
   onBackToSubject,
-  onBackToCatalogue,
 }: QuizResultsProps) {
   const [reviewFilter, setReviewFilter] = useState<'all' | 'missed'>('all');
 
@@ -42,7 +48,7 @@ export function QuizResults({
     summary.total > 0 ? ((summary.score / summary.total) * 20).toFixed(1).replace('.', ',') : '0';
 
   return (
-    <section className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
+    <section className="mx-auto max-w-3xl px-4 py-5 sm:px-6 sm:py-8 pb-24 md:pb-10">
       {/* Main Score Card */}
       <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-6">
         <p className="font-mono-code text-[11.5px] font-medium uppercase tracking-[0.08em] text-[var(--warm)]">
@@ -61,7 +67,7 @@ export function QuizResults({
 
           <div className="text-right font-mono-code">
             <div className="text-[20px] font-semibold tabular-nums text-[var(--accent)]">
-              {summary.percentage}%
+              +{summary.points} pts · {summary.percentage}%
             </div>
             <div className="text-[12.5px] text-[var(--dim)] tabular-nums">
               Équivalent {noteSur20} / 20
@@ -69,20 +75,49 @@ export function QuizResults({
           </div>
         </div>
 
-        {/* Chapter Breakdown */}
-        {summary.byChapter.length > 0 && (
+        {/* Auto-saved Score Confirmation */}
+        {scoreSavedStatus && (
+          <div
+            role="status"
+            className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-3.5 py-2.5 text-[13px]"
+          >
+            <span className="text-[var(--text)]">
+              {scoreSavedStatus === 'saving' ? (
+                <>Enregistrement du score pour <strong>{pseudo || 'Étudiant'}</strong>...</>
+              ) : (
+                <>
+                  Score enregistré pour <strong>{pseudo || 'Étudiant'}</strong> ({sectionDs}) :{' '}
+                  <strong className="font-mono-code text-[var(--accent)]">
+                    +{summary.points} pts
+                  </strong>
+                </>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={onOpenLeaderboard}
+              className="inline-flex items-center gap-1 font-semibold text-[var(--accent)] hover:underline underline-offset-4"
+            >
+              <Trophy className="h-3.5 w-3.5" />
+              <span>Voir le classement</span>
+            </button>
+          </div>
+        )}
+
+        {/* Theme Breakdown */}
+        {summary.byTheme.length > 0 && (
           <div className="mt-5 space-y-2.5 border-t border-[var(--line)] pt-4">
             <p className="font-mono-code text-[11.5px] uppercase tracking-[0.06em] text-[var(--dim)]">
-              Détail par chapitre
+              Détail par thème
             </p>
-            {summary.byChapter.map((ch) => {
-              const pct = ch.total > 0 ? Math.round((ch.right / ch.total) * 100) : 0;
+            {summary.byTheme.map((item) => {
+              const pct = item.total > 0 ? Math.round((item.right / item.total) * 100) : 0;
               return (
                 <div
-                  key={ch.chapitre}
+                  key={item.theme}
                   className="grid grid-cols-1 gap-1 sm:grid-cols-[minmax(0,200px)_1fr_auto] sm:items-center sm:gap-3 text-[13.5px]"
                 >
-                  <span className="truncate font-medium text-[var(--text)]">{ch.chapitre}</span>
+                  <span className="truncate font-medium text-[var(--text)]">{item.theme}</span>
                   <div className="h-[7px] overflow-hidden rounded-full bg-[var(--surface-2)]">
                     <div
                       className="h-full rounded-full transition-all"
@@ -94,7 +129,7 @@ export function QuizResults({
                     />
                   </div>
                   <span className="font-mono-code text-[12.5px] tabular-nums text-[var(--dim)]">
-                    {ch.right}/{ch.total}
+                    {item.right}/{item.total}
                   </span>
                 </div>
               );
@@ -102,7 +137,7 @@ export function QuizResults({
           </div>
         )}
 
-        {/* Primary Actions — including Rejouer mes erreurs */}
+        {/* Primary Actions — including Rejouer mes erreurs & Classement */}
         <div className="mt-6 flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-5">
           {summary.missedQuestions.length > 0 && (
             <button
@@ -126,19 +161,20 @@ export function QuizResults({
 
           <button
             type="button"
-            onClick={onBackToSubject}
+            onClick={onOpenLeaderboard}
             className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3.5 py-2 text-[13.5px] font-medium text-[var(--text)] hover:border-[var(--accent)] whitespace-nowrap"
           >
-            <ArrowLeft className="h-4 w-4 shrink-0" />
-            <span>Filtres</span>
+            <Trophy className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+            <span>Classement</span>
           </button>
 
           <button
             type="button"
-            onClick={onBackToCatalogue}
-            className="inline-flex min-h-[44px] items-center justify-center rounded-lg border border-transparent px-3 py-2 text-[13.5px] font-medium text-[var(--dim)] hover:text-[var(--text)] whitespace-nowrap"
+            onClick={onBackToSubject}
+            className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-transparent px-3 py-2 text-[13.5px] font-medium text-[var(--dim)] hover:text-[var(--text)] whitespace-nowrap"
           >
-            Catalogue
+            <ArrowLeft className="h-4 w-4 shrink-0" />
+            <span>Révisions</span>
           </button>
         </div>
       </div>
@@ -191,7 +227,7 @@ export function QuizResults({
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-mono-code text-[11.5px] uppercase tracking-[0.06em] text-[var(--dim)]">
-                    Q{number} · {q.chapitre} · {q.type_source}
+                    Q{number} · {q.section_ds} · {q.themes.join(' / ')}
                   </span>
                   <span
                     className={`inline-flex items-center gap-1 font-mono-code text-[12px] font-semibold ${

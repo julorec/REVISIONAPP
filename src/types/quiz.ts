@@ -1,6 +1,6 @@
-export type SourceType = 'Cours' | 'Annales';
+export type QuizMode = 'themes' | 'exam';
 
-export type QuizMode = 'all' | 'Cours' | 'Annales' | 'exam';
+export type ExamSize = 20 | 30;
 
 export type QuestionType = 'qcm' | 'vrai_faux' | 'calcul' | 'ordre';
 
@@ -9,6 +9,8 @@ export type CodeLanguage = 'c' | 'vhdl' | 'asm' | 'python' | 'text';
 export interface QuizQuestion {
   id: string;
   type: QuestionType;
+  /** Multiple notion/topic tags per question (e.g. ["Pointeurs", "Allocation dynamique"]) */
+  themes: string[];
   ask: string;
   concept?: string;
   code?: string;
@@ -38,19 +40,42 @@ export type UserAnswer =
 
 export interface HydratedQuestion extends QuizQuestion {
   matiere: string;
+  section_ds: string;
   chapitre: string;
-  type_source: SourceType;
   quizId: string;
 }
 
 export interface QuizRow {
   id: string;
   matiere: string;
+  section_ds: string;
   chapitre: string;
-  type_source: SourceType;
   questions: QuizQuestion[];
   origin?: 'supabase' | 'local' | 'seed';
   created_at?: string;
+}
+
+export interface ScoreEntry {
+  id: string;
+  pseudo: string;
+  matiere: string;
+  section_ds: string;
+  points: number;
+  bonnes_reponses: number;
+  total_questions: number;
+  created_at?: string;
+  origin?: 'supabase' | 'local' | 'seed';
+}
+
+export interface LeaderboardRow {
+  rank: number;
+  pseudo: string;
+  points: number;
+  bonnesReponses: number;
+  totalQuestions: number;
+  sessionsCount: number;
+  accuracy: number;
+  isCurrentUser: boolean;
 }
 
 export interface QuestionProgress {
@@ -62,23 +87,27 @@ export interface QuestionProgress {
 
 export type ProgressMap = Record<string, QuestionProgress>;
 
-export interface ChapterSummary {
-  chapitre: string;
+export interface ThemeSummary {
+  theme: string;
   totalQuestions: number;
-  coursCount: number;
-  annalesCount: number;
+  seenCount: number;
+  missedCount: number;
+}
+
+export interface SectionSummary {
+  section_ds: string;
+  totalQuestions: number;
   seenCount: number;
   rightCount: number;
   triesCount: number;
   missedCount: number;
+  themes: ThemeSummary[];
 }
 
 export interface SubjectSummary {
   matiere: string;
   totalQuestions: number;
-  coursCount: number;
-  annalesCount: number;
-  chapters: ChapterSummary[];
+  sections: SectionSummary[];
   seenCount: number;
   triesCount: number;
   rightCount: number;
@@ -90,9 +119,10 @@ export interface QuizResultSummary {
   score: number;
   total: number;
   percentage: number;
+  points: number;
   missedQuestions: HydratedQuestion[];
-  byChapter: Array<{
-    chapitre: string;
+  byTheme: Array<{
+    theme: string;
     right: number;
     total: number;
   }>;

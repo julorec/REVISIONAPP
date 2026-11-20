@@ -1,4 +1,4 @@
-import type { CodeLanguage, QuestionType, QuizQuestion, SourceType } from '../types/quiz';
+import type { CodeLanguage, QuestionType, QuizQuestion } from '../types/quiz';
 import { detectCodeLanguage } from './codeHighlight';
 
 export interface NormalizationResult {
@@ -16,31 +16,69 @@ const LETTER_TO_INDEX: Record<string, number> = {
   f: 5,
 };
 
-export function normalizeSourceType(raw: unknown): SourceType {
-  if (typeof raw === 'string') {
-    const cleaned = raw.trim().toLowerCase();
-    if (
-      cleaned.includes('annale') ||
-      cleaned.includes('exam') ||
-      cleaned.includes('ds') ||
-      cleaned.includes('partiel')
-    ) {
-      return 'Annales';
+export function normalizeThemes(rawThemes: unknown, fallbackConcept?: string): string[] {
+  const collected: string[] = [];
+
+  if (Array.isArray(rawThemes)) {
+    for (const item of rawThemes) {
+      if (typeof item === 'string') {
+        const cleaned = item.trim();
+        if (cleaned) collected.push(cleaned);
+      } else if (item !== null && item !== undefined) {
+        const cleaned = String(item).trim();
+        if (cleaned) collected.push(cleaned);
+      }
+    }
+  } else if (typeof rawThemes === 'string' && rawThemes.trim()) {
+    for (const part of rawThemes.split(/[,;|]/)) {
+      const cleaned = part.trim();
+      if (cleaned) collected.push(cleaned);
     }
   }
-  return 'Cours';
+
+  if (collected.length === 0 && fallbackConcept && fallbackConcept.trim()) {
+    collected.push(fallbackConcept.trim());
+  }
+
+  // Case-insensitive deduplication preserving first casing
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const tag of collected) {
+    const key = tag.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(tag);
+    }
+  }
+
+  return unique.length > 0 ? unique : ['Général'];
 }
 
 export function normalizeQuestionType(raw: unknown, rec: Record<string, unknown>): QuestionType {
   if (typeof raw === 'string') {
     const cleaned = raw.trim().toLowerCase().replace(/[\s-]+/g, '_');
-    if (cleaned === 'vrai_faux' || cleaned === 'vf' || cleaned === 'true_false' || cleaned === 'boolean') {
+    if (
+      cleaned === 'vrai_faux' ||
+      cleaned === 'vf' ||
+      cleaned === 'true_false' ||
+      cleaned === 'boolean'
+    ) {
       return 'vrai_faux';
     }
-    if (cleaned === 'calcul' || cleaned === 'numeric' || cleaned === 'numerique' || cleaned === 'numérique') {
+    if (
+      cleaned === 'calcul' ||
+      cleaned === 'numeric' ||
+      cleaned === 'numerique' ||
+      cleaned === 'numérique'
+    ) {
       return 'calcul';
     }
-    if (cleaned === 'ordre' || cleaned === 'order' || cleaned === 'sequence' || cleaned === 'séquence') {
+    if (
+      cleaned === 'ordre' ||
+      cleaned === 'order' ||
+      cleaned === 'sequence' ||
+      cleaned === 'séquence'
+    ) {
       return 'ordre';
     }
     if (cleaned === 'qcm' || cleaned === 'mcq' || cleaned === 'choice') {
@@ -196,6 +234,11 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
           ? rec.tag.trim()
           : undefined;
 
+    const themes = normalizeThemes(
+      rec.themes ?? rec.thèmes ?? rec.tags ?? rec.theme ?? rec.thème,
+      concept
+    );
+
     const stdin =
       typeof rec.stdin === 'string' && rec.stdin.length > 0 ? rec.stdin : undefined;
 
@@ -223,6 +266,7 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
       questions.push({
         id,
         type: 'ordre',
+        themes,
         ask,
         concept,
         code,
@@ -264,6 +308,7 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
       questions.push({
         id,
         type: 'calcul',
+        themes,
         ask,
         concept,
         code,
@@ -314,6 +359,7 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
     questions.push({
       id,
       type: qType,
+      themes,
       ask,
       concept,
       code,

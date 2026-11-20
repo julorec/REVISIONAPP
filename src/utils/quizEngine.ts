@@ -1,17 +1,29 @@
 import type {
-  ChapterSummary,
+  ExamSize,
   HydratedQuestion,
   ProgressMap,
   QuizMode,
   QuizQuestion,
   QuizResultSummary,
   QuizRow,
+  SectionSummary,
   SubjectSummary,
+  ThemeSummary,
   UserAnswer,
 } from '../types/quiz';
+import { computeQuizPoints } from './leaderboard';
+import { normalizeThemes } from './quizNormalizer';
 
-export const EXAM_QUESTION_LIMIT = 20;
+export const EXAM_QUESTION_LIMIT: ExamSize = 20;
 export const DEFAULT_NUMERIC_TOLERANCE = 0.05; // ±5%
+export const DEFAULT_SECTION_DS = 'DS 1';
+
+export function normalizeSectionDs(raw: unknown): string {
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    return raw.trim();
+  }
+  return DEFAULT_SECTION_DS;
+}
 
 export function isChoiceQuestion(q: QuizQuestion): boolean {
   if (q.type === 'ordre') return false;
@@ -24,7 +36,6 @@ export function isChoiceQuestion(q: QuizQuestion): boolean {
 export function parseNumericInput(raw: string): number | null {
   const cleaned = raw.trim().replace(/\s+/g, '').replace(',', '.');
   if (!cleaned) return null;
-  // Allow optional sign, decimals, scientific notation (e.g. -1.5e-3)
   if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(cleaned)) {
     return null;
   }
@@ -77,15 +88,19 @@ export function evaluateAnswer(q: QuizQuestion, answer: UserAnswer | null | unde
     );
   }
 
-  // qcm, vrai_faux, or calcul with options
   if (answer.kind !== 'choice' || typeof q.ans !== 'number') return false;
   return answer.index === q.ans;
 }
 
-/**
- * Deterministically or randomly shuffles order items so that for length >= 2,
- * the initial presentation is guaranteed NOT to match ordre_correct already.
- */
+export function shuffleArray<T>(items: T[], rng: () => number = Math.random): T[] {
+  const copy = items.slice();
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
 export function getShuffledOrderItems(
   correctOrder: string[],
   rng: () => number = Math.random
@@ -99,26 +114,125 @@ export function getShuffledOrderItems(
     const same = candidate.every((item, idx) => item === correctOrder[idx]);
     if (!same) return candidate;
   }
-  // Deterministic rotation fallback if random attempts happened to match
   return [...correctOrder.slice(1), correctOrder[0]];
 }
 
 export function hydrateQuestions(rows: QuizRow[]): HydratedQuestion[] {
   const result: HydratedQuestion[] = [];
   for (const row of rows) {
+    const sectionDs = normalizeSectionDs(row.section_ds);
     for (let i = 0; i < row.questions.length; i++) {
       const q = row.questions[i];
+      const themes = normalizeThemes(q.themes, q.concept || row.chapitre);
       result.push({
         ...q,
+        themes,
         id: q.id.startsWith(`${row.id}:`) ? q.id : `${row.id}:${q.id}`,
         matiere: row.matiere,
-        chapitre: row.chapitre,
-        type_source: row.type_source,
+        section_ds: sectionDs,
+        chapitre: row.chapitre || 'Banque générale',
         quizId: row.id,
       });
     }
   }
   return result;
+}
+
+/**
+ * Extracts all unique themes from a section's questions (handling multi-theme questions),
+ * sorted by question count descending then alphabetically.
+ */
+export function extractSectionThemes(
+  questions: HydratedQuestion[],
+  progress: ProgressMap
+): ThemeSummary[] {
+  const map = new Map<string, ThemeSummary>();
+
+  for (const q of questions) {
+    const stat = progress[q.id];
+    const seen = stat && stat.tries > 0 ? 1 : 0;
+    const missed = stat && stat.tries > 0 && !stat.lastOk ? 1 : 0;
+
+    const seenInQuestion = new Set<string>();
+    for (const rawTheme of q.themes) {
+      const theme = rawTheme.trim();
+      if (!theme) continue;
+      const key = theme.toLowerCase();
+      if (seenInQuestion.has(key)) continue;
+      seenInQuestion.add(key);
+
+      const entry = map.get(key) ?? {
+        theme,
+        totalQuestions: 0,
+        seenCount: 0,
+        missedCount: 0,
+      };
+      entry.totalQuestions += 1;
+      entry.seenCount += seen;
+      entry.missedCount += missed;
+      map.set(key, entry);
+    }
+  }
+
+  return Array.from(map.values()).sort(
+    (a, b) => b.totalQuestions - a.totalQuestions || a.theme.localeCompare(b.theme, 'fr')
+  );
+}
+
+/**
+ * Filters questions by one or more selected themes (union semantics, no duplicates).
+ */
+export function filterQuestionsByThemes(
+  questions: HydratedQuestion[],
+  selectedThemes: string[]
+): HydratedQuestion[] {
+  if (selectedThemes.length === 0) return questions;
+  const targets = new Set(selectedThemes.map((t) => t.trim().toLowerCase()));
+  return questions.filter((q) =>
+    q.themes.some((t) => targets.has(t.trim().toLowerCase()))
+  );
+}
+
+export function countMatchingThemeQuestions(
+  rows: QuizRow[],
+  matiere: string,
+  sectionDs: string,
+  selectedThemes: string[]
+): number {
+  const pool = hydrateQuestions(
+    rows.filter((r) => r.matiere === matiere && normalizeSectionDs(r.section_ds) === sectionDs)
+  );
+  return filterQuestionsByThemes(pool, selectedThemes).length;
+}
+
+/**
+ * Appends incoming questions into an existing DS question array without overwriting
+ * existing entries, ensuring unique IDs across the merged array.
+ */
+export function mergeQuestionsIntoBatch(
+  existing: QuizQuestion[],
+  incoming: QuizQuestion[]
+): QuizQuestion[] {
+  const usedIds = new Set(existing.map((q) => q.id));
+  const merged: QuizQuestion[] = existing.slice();
+
+  for (let i = 0; i < incoming.length; i++) {
+    const q = incoming[i];
+    let candidateId = q.id || `m-${existing.length + i + 1}`;
+    let suffix = 2;
+    while (usedIds.has(candidateId)) {
+      candidateId = `${q.id || 'q'}-${suffix}`;
+      suffix += 1;
+    }
+    usedIds.add(candidateId);
+    merged.push({
+      ...q,
+      id: candidateId,
+      themes: normalizeThemes(q.themes, q.concept),
+    });
+  }
+
+  return merged;
 }
 
 export function buildSubjectSummaries(
@@ -137,18 +251,14 @@ export function buildSubjectSummaries(
   const summaries: SubjectSummary[] = [];
 
   for (const [matiere, questions] of bySubject.entries()) {
-    const chapterMap = new Map<string, ChapterSummary>();
-    let coursCount = 0;
-    let annalesCount = 0;
+    const sectionQuestionsMap = new Map<string, HydratedQuestion[]>();
+
     let seenCount = 0;
     let triesCount = 0;
     let rightCount = 0;
     let missedCount = 0;
 
     for (const q of questions) {
-      if (q.type_source === 'Cours') coursCount++;
-      else annalesCount++;
-
       const stat = progress[q.id];
       const seen = stat && stat.tries > 0 ? 1 : 0;
       const tries = stat ? stat.tries : 0;
@@ -160,34 +270,44 @@ export function buildSubjectSummaries(
       rightCount += right;
       missedCount += missed;
 
-      const existing = chapterMap.get(q.chapitre) ?? {
-        chapitre: q.chapitre,
-        totalQuestions: 0,
-        coursCount: 0,
-        annalesCount: 0,
-        seenCount: 0,
-        rightCount: 0,
-        triesCount: 0,
-        missedCount: 0,
-      };
-
-      existing.totalQuestions += 1;
-      if (q.type_source === 'Cours') existing.coursCount += 1;
-      else existing.annalesCount += 1;
-      existing.seenCount += seen;
-      existing.rightCount += right;
-      existing.triesCount += tries;
-      existing.missedCount += missed;
-
-      chapterMap.set(q.chapitre, existing);
+      const secList = sectionQuestionsMap.get(q.section_ds) ?? [];
+      secList.push(q);
+      sectionQuestionsMap.set(q.section_ds, secList);
     }
+
+    const sections: SectionSummary[] = Array.from(sectionQuestionsMap.entries())
+      .map(([section_ds, secQuestions]) => {
+        let secSeen = 0;
+        let secTries = 0;
+        let secRight = 0;
+        let secMissed = 0;
+
+        for (const q of secQuestions) {
+          const stat = progress[q.id];
+          if (stat && stat.tries > 0) secSeen += 1;
+          if (stat) {
+            secTries += stat.tries;
+            secRight += stat.right;
+            if (stat.tries > 0 && !stat.lastOk) secMissed += 1;
+          }
+        }
+
+        return {
+          section_ds,
+          totalQuestions: secQuestions.length,
+          seenCount: secSeen,
+          rightCount: secRight,
+          triesCount: secTries,
+          missedCount: secMissed,
+          themes: extractSectionThemes(secQuestions, progress),
+        };
+      })
+      .sort((a, b) => a.section_ds.localeCompare(b.section_ds, 'fr', { numeric: true }));
 
     summaries.push({
       matiere,
       totalQuestions: questions.length,
-      coursCount,
-      annalesCount,
-      chapters: Array.from(chapterMap.values()),
+      sections,
       seenCount,
       triesCount,
       rightCount,
@@ -201,20 +321,12 @@ export function buildSubjectSummaries(
   );
 }
 
-export function shuffleArray<T>(items: T[], rng: () => number = Math.random): T[] {
-  const copy = items.slice();
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
 export interface FilterCriteria {
   matiere: string;
-  chapitre: string; // 'all' or exact chapter name
+  section_ds?: string; // 'all' or exact section_ds
+  themes?: string[]; // empty or omitted = all themes in DS
   mode: QuizMode;
-  examSize?: number;
+  examSize?: ExamSize;
 }
 
 export function selectQuizQuestions(
@@ -222,33 +334,39 @@ export function selectQuizQuestions(
   criteria: FilterCriteria,
   rng: () => number = Math.random
 ): HydratedQuestion[] {
-  const subjectQuestions = hydrateQuestions(
-    rows.filter((r) => r.matiere === criteria.matiere)
-  );
+  let pool = hydrateQuestions(rows.filter((r) => r.matiere === criteria.matiere));
 
-  // Mode Examen Mélangé: pioche 20 questions aléatoires parmi TOUS les chapitres de la matière
+  if (criteria.section_ds && criteria.section_ds !== 'all') {
+    pool = pool.filter((q) => q.section_ds === criteria.section_ds);
+  }
+
+  // Mode Examen DS: 20 or 30 random questions drawn from the entire DS
   if (criteria.mode === 'exam') {
     const limit = criteria.examSize ?? EXAM_QUESTION_LIMIT;
-    return shuffleArray(subjectQuestions, rng).slice(0, Math.min(limit, subjectQuestions.length));
+    return shuffleArray(pool, rng).slice(0, Math.min(limit, pool.length));
   }
 
-  let filtered = subjectQuestions;
-  if (criteria.chapitre !== 'all') {
-    filtered = filtered.filter((q) => q.chapitre === criteria.chapitre);
-  }
-  if (criteria.mode === 'Cours' || criteria.mode === 'Annales') {
-    filtered = filtered.filter((q) => q.type_source === criteria.mode);
+  // Mode Thèmes: filter by selected themes (if any) and shuffle for training
+  if (criteria.themes && criteria.themes.length > 0) {
+    pool = filterQuestionsByThemes(pool, criteria.themes);
   }
 
-  return filtered;
+  return shuffleArray(pool, rng);
 }
 
 export function getMissedQuestionsForSubject(
   rows: QuizRow[],
   matiere: string,
-  progress: ProgressMap
+  progress: ProgressMap,
+  sectionDs = 'all'
 ): HydratedQuestion[] {
-  const subjectQuestions = hydrateQuestions(rows.filter((r) => r.matiere === matiere));
+  const subjectQuestions = hydrateQuestions(
+    rows.filter(
+      (r) =>
+        r.matiere === matiere &&
+        (sectionDs === 'all' || normalizeSectionDs(r.section_ds) === sectionDs)
+    )
+  );
   return subjectQuestions.filter((q) => {
     const stat = progress[q.id];
     return stat && stat.tries > 0 && !stat.lastOk;
@@ -261,7 +379,7 @@ export function computeQuizResult(
 ): QuizResultSummary {
   let score = 0;
   const missedQuestions: HydratedQuestion[] = [];
-  const chapterStats = new Map<string, { right: number; total: number }>();
+  const themeStats = new Map<string, { theme: string; right: number; total: number }>();
 
   questions.forEach((q, idx) => {
     const isCorrect = evaluateAnswer(q, answers[idx]);
@@ -271,24 +389,28 @@ export function computeQuizResult(
       missedQuestions.push(q);
     }
 
-    const entry = chapterStats.get(q.chapitre) ?? { right: 0, total: 0 };
-    entry.total += 1;
-    if (isCorrect) entry.right += 1;
-    chapterStats.set(q.chapitre, entry);
+    const qThemes = q.themes.length > 0 ? q.themes : ['Général'];
+    for (const theme of qThemes) {
+      const key = theme.toLowerCase();
+      const entry = themeStats.get(key) ?? { theme, right: 0, total: 0 };
+      entry.total += 1;
+      if (isCorrect) entry.right += 1;
+      themeStats.set(key, entry);
+    }
   });
 
   const total = questions.length;
   const percentage = total > 0 ? Math.round((score / total) * 100) : 0;
+  const points = computeQuizPoints(score, total);
 
   return {
     score,
     total,
     percentage,
+    points,
     missedQuestions,
-    byChapter: Array.from(chapterStats.entries()).map(([chapitre, s]) => ({
-      chapitre,
-      right: s.right,
-      total: s.total,
-    })),
+    byTheme: Array.from(themeStats.values()).sort(
+      (a, b) => b.total - a.total || a.theme.localeCompare(b.theme, 'fr')
+    ),
   };
 }
