@@ -4,6 +4,8 @@ export type ExamSize = 20 | 30;
 
 export type QuestionType = 'qcm' | 'vrai_faux' | 'calcul' | 'ordre';
 
+export type DifficultyLevel = 1 | 2 | 3;
+
 export type CodeLanguage = 'c' | 'vhdl' | 'asm' | 'python' | 'text';
 
 export interface QuizQuestion {
@@ -11,6 +13,8 @@ export interface QuizQuestion {
   type: QuestionType;
   /** Multiple notion/topic tags per question (e.g. ["Pointeurs", "Allocation dynamique"]) */
   themes: string[];
+  /** Difficulty level: 1 = Bases, 2 = TD (default), 3 = Partiel & Pièges */
+  difficulte?: DifficultyLevel;
   ask: string;
   concept?: string;
   code?: string;
@@ -39,6 +43,7 @@ export type UserAnswer =
   | { kind: 'order'; sequence: string[] };
 
 export interface HydratedQuestion extends QuizQuestion {
+  difficulte: DifficultyLevel;
   matiere: string;
   section_ds: string;
   chapitre: string;
@@ -102,6 +107,7 @@ export interface SectionSummary {
   triesCount: number;
   missedCount: number;
   themes: ThemeSummary[];
+  difficultyCounts: Record<DifficultyLevel, number>;
 }
 
 export interface SubjectSummary {

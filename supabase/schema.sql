@@ -23,8 +23,9 @@ $$;
 -- ----------------------------------------------------------------------------
 -- 2. Table public.quizzes (Matières -> Sections DS -> Banque de questions JSONB)
 --    Chaque question du tableau JSONB `questions` supporte :
---    { id, type, themes: ["Thème 1", "Thème 2"], ask, code, lang, svg,
---      opts, ans, reponse_numerique, unite, tolerance, ordre_correct, why }
+--    { id, type, themes: ["Thème 1", "Thème 2"], difficulte: 1|2|3 (défaut 2),
+--      ask, code, lang, svg, opts, ans/reponse_index, reponse_numerique,
+--      unite, tolerance, ordre_correct, why }
 -- ----------------------------------------------------------------------------
 create table if not exists public.quizzes (
   id uuid primary key default gen_random_uuid(),
@@ -68,6 +69,29 @@ create index if not exists idx_quizzes_matiere_section_ds
 
 create index if not exists idx_quizzes_questions_gin
   on public.quizzes using gin (questions);
+
+-- Rétrocompatibilité idempotente : attribue difficulte = 2 (Intermédiaire / TD)
+-- aux anciennes questions JSONB qui ne possèdent pas encore ce champ.
+update public.quizzes
+set questions = (
+  select coalesce(
+    jsonb_agg(
+      case
+        when jsonb_typeof(elem) = 'object' and not (elem ? 'difficulte')
+          then elem || '{"difficulte": 2}'::jsonb
+        else elem
+      end
+    ),
+    '[]'::jsonb
+  )
+  from jsonb_array_elements(questions) as elem
+)
+where jsonb_typeof(questions) = 'array'
+  and exists (
+    select 1
+    from jsonb_array_elements(questions) as elem
+    where jsonb_typeof(elem) = 'object' and not (elem ? 'difficulte')
+  );
 
 -- ----------------------------------------------------------------------------
 -- 3. Table public.scores (Classement par matière et section_ds)

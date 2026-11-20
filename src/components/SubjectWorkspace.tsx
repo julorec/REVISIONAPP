@@ -1,16 +1,33 @@
 import { useEffect, useState } from 'react';
 import { BookOpen, Check, Play, RotateCcw, Shuffle, Trophy, X } from 'lucide-react';
 import type {
+  DifficultyLevel,
   ExamSize,
   HydratedQuestion,
   QuizRow,
   ScoreEntry,
   SubjectSummary,
 } from '../types/quiz';
-import { countMatchingThemeQuestions } from '../utils/quizEngine';
+import { countMatchingFilteredQuestions } from '../utils/quizEngine';
 import { SubjectLeaderboard } from './SubjectLeaderboard';
 
 export type SubjectSubTab = 'revisions' | 'classement';
+
+const DIFFICULTY_OPTIONS: Array<{
+  level: DifficultyLevel;
+  stars: string;
+  label: string;
+  aria: string;
+}> = [
+  { level: 1, stars: '⭐', label: 'Bases', aria: 'Niveau 1 étoile : Facile, Bases du cours' },
+  { level: 2, stars: '⭐⭐', label: 'TD', aria: 'Niveau 2 étoiles : Intermédiaire, Application TD' },
+  {
+    level: 3,
+    stars: '⭐⭐⭐',
+    label: 'Partiel',
+    aria: 'Niveau 3 étoiles : Difficile, Niveau Partiel et Pièges',
+  },
+];
 
 interface SubjectWorkspaceProps {
   subject: SubjectSummary;
@@ -25,7 +42,11 @@ interface SubjectWorkspaceProps {
   onChangeLeaderboardSection: (sectionDs: string) => void;
   onRefreshScores: () => void;
   onLaunchSectionExam: (sectionDs: string, examSize: ExamSize) => void;
-  onLaunchThemesQuiz: (sectionDs: string, selectedThemes: string[]) => void;
+  onLaunchThemesQuiz: (
+    sectionDs: string,
+    selectedThemes: string[],
+    selectedDifficulties: DifficultyLevel[]
+  ) => void;
   onReplayMissed: () => void;
 }
 
@@ -47,12 +68,17 @@ export function SubjectWorkspace({
 }: SubjectWorkspaceProps) {
   // Multi-selected themes keyed per section_ds
   const [selectedThemesByDs, setSelectedThemesByDs] = useState<Record<string, string[]>>({});
+  // Multi-selected difficulty levels keyed per section_ds (empty = Tout)
+  const [selectedDifficultiesByDs, setSelectedDifficultiesByDs] = useState<
+    Record<string, DifficultyLevel[]>
+  >({});
   // Preferred exam length (20 or 30 questions) keyed per section_ds
   const [examSizeByDs, setExamSizeByDs] = useState<Record<string, ExamSize>>({});
 
-  // Reset theme selections cleanly when switching subject
+  // Reset filter selections cleanly when switching subject
   useEffect(() => {
     setSelectedThemesByDs({});
+    setSelectedDifficultiesByDs({});
   }, [subject.matiere]);
 
   const toggleTheme = (sectionDs: string, theme: string) => {
@@ -64,8 +90,24 @@ export function SubjectWorkspace({
     });
   };
 
-  const clearThemes = (sectionDs: string) => {
+  const toggleDifficulty = (sectionDs: string, level: DifficultyLevel) => {
+    setSelectedDifficultiesByDs((prev) => {
+      const current = prev[sectionDs] ?? [];
+      const exists = current.includes(level);
+      const next = exists
+        ? current.filter((d) => d !== level)
+        : [...current, level].sort((a, b) => a - b);
+      return { ...prev, [sectionDs]: next };
+    });
+  };
+
+  const clearDifficulties = (sectionDs: string) => {
+    setSelectedDifficultiesByDs((prev) => ({ ...prev, [sectionDs]: [] }));
+  };
+
+  const clearAllFilters = (sectionDs: string) => {
     setSelectedThemesByDs((prev) => ({ ...prev, [sectionDs]: [] }));
+    setSelectedDifficultiesByDs((prev) => ({ ...prev, [sectionDs]: [] }));
   };
 
   const getExamSize = (sectionDs: string): ExamSize => examSizeByDs[sectionDs] ?? 20;
@@ -134,7 +176,7 @@ export function SubjectWorkspace({
         </button>
       </nav>
 
-      {/* ==================== TAB 1: RÉVISIONS (DS + MULTI-THÈMES) ==================== */}
+      {/* ==================== TAB 1: RÉVISIONS (DS + GRANDS THÈMES + DIFFICULTÉ) ==================== */}
       {activeSubTab === 'revisions' && (
         <div
           className={`mt-4 sm:mt-5 grid grid-cols-1 gap-4 ${
@@ -143,6 +185,8 @@ export function SubjectWorkspace({
         >
           {subject.sections.map((section) => {
             const selectedThemes = selectedThemesByDs[section.section_ds] ?? [];
+            const selectedDifficulties = selectedDifficultiesByDs[section.section_ds] ?? [];
+            const hasActiveFilters = selectedThemes.length > 0 || selectedDifficulties.length > 0;
             const examSize = getExamSize(section.section_ds);
             const effectiveExamCount = Math.min(examSize, section.totalQuestions);
             const seenPct =
@@ -150,15 +194,15 @@ export function SubjectWorkspace({
                 ? Math.round((section.seenCount / section.totalQuestions) * 100)
                 : 0;
 
-            const matchingCount =
-              selectedThemes.length > 0
-                ? countMatchingThemeQuestions(
-                    allRows,
-                    subject.matiere,
-                    section.section_ds,
-                    selectedThemes
-                  )
-                : section.totalQuestions;
+            const matchingCount = hasActiveFilters
+              ? countMatchingFilteredQuestions(
+                  allRows,
+                  subject.matiere,
+                  section.section_ds,
+                  selectedThemes,
+                  selectedDifficulties
+                )
+              : section.totalQuestions;
 
             return (
               <section
@@ -225,71 +269,145 @@ export function SubjectWorkspace({
                   </div>
                 </div>
 
-                {/* Multi-Select Theme Filters */}
-                <div className="mt-5 pt-4 border-t border-[var(--line)]">
-                  <div className="flex items-center justify-between gap-2 mb-2.5">
-                    <p className="text-[12.5px] font-medium text-[var(--dim)]">
-                      Filtrer par thèmes ({section.themes.length})
+                {/* Combinable Filter Bars: Grands Thèmes + Niveau de difficulté */}
+                <div className="mt-5 pt-4 border-t border-[var(--line)] space-y-4">
+                  {/* Bar 1: Grands Thèmes */}
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <p className="text-[12.5px] font-medium text-[var(--dim)]">
+                        Grands thèmes ({section.themes.length})
+                      </p>
+                      {hasActiveFilters && (
+                        <button
+                          type="button"
+                          onClick={() => clearAllFilters(section.section_ds)}
+                          className="inline-flex items-center gap-1 text-[12.5px] font-medium text-[var(--accent)] hover:underline"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          <span>Réinitialiser</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div
+                      className="flex flex-wrap gap-2"
+                      role="group"
+                      aria-label={`Grands thèmes de ${section.section_ds}`}
+                    >
+                      {section.themes.map((item) => {
+                        const active = selectedThemes.includes(item.theme);
+                        return (
+                          <button
+                            key={item.theme}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => toggleTheme(section.section_ds, item.theme)}
+                            className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-medium transition-colors ${
+                              active
+                                ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)] font-semibold'
+                                : 'border-[var(--line)] bg-[var(--bg)] text-[var(--text)] hover:border-[var(--accent)]'
+                            }`}
+                          >
+                            {active && (
+                              <Check className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                            )}
+                            <span>{item.theme}</span>
+                            <span className="font-mono-code text-[11.5px] text-[var(--dim)] tabular-nums">
+                              {item.totalQuestions}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Bar 2: Niveau de difficulté (Tout, 1 ⭐ Bases, 2 ⭐⭐ TD, 3 ⭐⭐⭐ Partiel) */}
+                  <div>
+                    <p className="text-[12.5px] font-medium text-[var(--dim)] mb-2">
+                      Niveau de difficulté
                     </p>
-                    {selectedThemes.length > 0 && (
+                    <div
+                      className="flex flex-wrap gap-1.5"
+                      role="group"
+                      aria-label={`Niveau de difficulté pour ${section.section_ds}`}
+                    >
                       <button
                         type="button"
-                        onClick={() => clearThemes(section.section_ds)}
-                        className="inline-flex items-center gap-1 text-[12.5px] font-medium text-[var(--accent)] hover:underline"
+                        aria-pressed={selectedDifficulties.length === 0}
+                        onClick={() => clearDifficulties(section.section_ds)}
+                        className={`inline-flex min-h-[38px] items-center justify-center rounded-xl border px-3 py-1.5 text-[13px] font-medium transition-colors ${
+                          selectedDifficulties.length === 0
+                            ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)] font-semibold'
+                            : 'border-[var(--line)] bg-[var(--bg)] text-[var(--dim)] hover:border-[var(--accent)] hover:text-[var(--text)]'
+                        }`}
                       >
-                        <X className="h-3.5 w-3.5" />
-                        <span>Effacer ({selectedThemes.length})</span>
+                        Tout
                       </button>
-                    )}
+
+                      {DIFFICULTY_OPTIONS.map((opt) => {
+                        const active = selectedDifficulties.includes(opt.level);
+                        return (
+                          <button
+                            key={opt.level}
+                            type="button"
+                            aria-pressed={active}
+                            aria-label={opt.aria}
+                            onClick={() => toggleDifficulty(section.section_ds, opt.level)}
+                            className={`inline-flex min-h-[38px] items-center gap-1 rounded-xl border px-2.5 py-1.5 text-[12.5px] font-medium transition-colors whitespace-nowrap ${
+                              active
+                                ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)] font-semibold'
+                                : 'border-[var(--line)] bg-[var(--bg)] text-[var(--text)] hover:border-[var(--accent)]'
+                            }`}
+                          >
+                            <span className="font-mono-code text-[12px]">{opt.level}</span>
+                            <span aria-hidden="true" className="text-[11px] leading-none">
+                              {opt.stars}
+                            </span>
+                            <span>({opt.label})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  <div
-                    className="flex flex-wrap gap-2"
-                    role="group"
-                    aria-label={`Thèmes de ${section.section_ds}`}
-                  >
-                    {section.themes.map((item) => {
-                      const active = selectedThemes.includes(item.theme);
-                      return (
-                        <button
-                          key={item.theme}
-                          type="button"
-                          aria-pressed={active}
-                          onClick={() => toggleTheme(section.section_ds, item.theme)}
-                          className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13.5px] font-medium transition-colors ${
-                            active
-                              ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)] font-semibold'
-                              : 'border-[var(--line)] bg-[var(--bg)] text-[var(--text)] hover:border-[var(--accent)]'
-                          }`}
-                        >
-                          {active && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />}
-                          <span>{item.theme}</span>
-                          <span className="font-mono-code text-[11.5px] text-[var(--dim)] tabular-nums">
-                            {item.totalQuestions}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {/* Real-time filtered question counter + Launch Training CTA */}
+                  <div className="pt-1">
+                    <div className="mb-2 flex items-center justify-between gap-2 text-[12.5px]">
+                      <span
+                        className={`font-mono-code tabular-nums ${
+                          matchingCount === 0 ? 'text-[var(--bad)] font-medium' : 'text-[var(--dim)]'
+                        }`}
+                        aria-live="polite"
+                      >
+                        {matchingCount === 0
+                          ? 'Aucune question pour cette combinaison de filtres'
+                          : `${matchingCount} question${matchingCount > 1 ? 's' : ''} disponible${matchingCount > 1 ? 's' : ''}${hasActiveFilters ? ' avec les filtres actifs' : ''}`}
+                      </span>
+                    </div>
 
-                  {/* Launch Training CTA for Selected Themes (or Full DS) */}
-                  <button
-                    type="button"
-                    onClick={() => onLaunchThemesQuiz(section.section_ds, selectedThemes)}
-                    disabled={matchingCount === 0}
-                    className={`mt-4 inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-[14px] font-semibold transition-colors active:scale-[0.99] disabled:opacity-45 ${
-                      selectedThemes.length > 0
-                        ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)]'
-                        : 'border-[var(--line)] bg-[var(--bg)] text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]'
-                    }`}
-                  >
-                    <Play className="h-4 w-4 shrink-0" />
-                    <span>
-                      {selectedThemes.length > 0
-                        ? `S'entraîner sur la sélection (${matchingCount} question${matchingCount > 1 ? 's' : ''})`
-                        : `Réviser tout le ${section.section_ds} (${section.totalQuestions}q)`}
-                    </span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onLaunchThemesQuiz(
+                          section.section_ds,
+                          selectedThemes,
+                          selectedDifficulties
+                        )
+                      }
+                      disabled={matchingCount === 0}
+                      className={`inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-[14px] font-semibold transition-colors active:scale-[0.99] disabled:opacity-45 ${
+                        hasActiveFilters && matchingCount > 0
+                          ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)]'
+                          : 'border-[var(--line)] bg-[var(--bg)] text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]'
+                      }`}
+                    >
+                      <Play className="h-4 w-4 shrink-0" />
+                      <span>
+                        Lancer l&apos;entraînement ({matchingCount} question
+                        {matchingCount > 1 ? 's' : ''})
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </section>
             );

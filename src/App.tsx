@@ -21,6 +21,7 @@ import {
   subscribeToSupabaseChanges,
 } from './lib/supabase';
 import type {
+  DifficultyLevel,
   ExamSize,
   HydratedQuestion,
   ProgressMap,
@@ -31,6 +32,7 @@ import type {
 import {
   buildSubjectSummaries,
   computeQuizResult,
+  getDifficultyStars,
   getMissedQuestionsForSubject,
   selectQuizQuestions,
   shuffleArray,
@@ -227,19 +229,32 @@ export default function App() {
     );
   };
 
-  const handleLaunchThemesQuiz = (sectionDs: string, selectedThemes: string[]) => {
+  const handleLaunchThemesQuiz = (
+    sectionDs: string,
+    selectedThemes: string[],
+    selectedDifficulties: DifficultyLevel[]
+  ) => {
     if (!currentSubject) return;
     const picked = selectQuizQuestions(rows, {
       matiere: currentSubject.matiere,
       section_ds: sectionDs,
       themes: selectedThemes,
+      difficulties: selectedDifficulties,
       mode: 'themes',
     });
-    const label =
-      selectedThemes.length > 0
-        ? `${sectionDs} · ${selectedThemes.slice(0, 2).join(' + ')}${selectedThemes.length > 2 ? ` (+${selectedThemes.length - 2})` : ''}`
-        : `${sectionDs} · Révision complète`;
-    startSession(currentSubject.matiere, sectionDs, label, picked);
+    const parts: string[] = [sectionDs];
+    if (selectedThemes.length > 0) {
+      parts.push(
+        `${selectedThemes.slice(0, 2).join(' + ')}${selectedThemes.length > 2 ? ` (+${selectedThemes.length - 2})` : ''}`
+      );
+    }
+    if (selectedDifficulties.length > 0) {
+      parts.push(selectedDifficulties.map(getDifficultyStars).join(' / '));
+    }
+    if (parts.length === 1) {
+      parts.push('Entraînement complet');
+    }
+    startSession(currentSubject.matiere, sectionDs, parts.join(' · '), picked);
   };
 
   const handleRecordAnswer = useCallback((questionId: string, isCorrect: boolean) => {

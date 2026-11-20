@@ -19,7 +19,7 @@ import {
   updateQuizInSupabase,
 } from '../lib/supabase';
 import type { QuizRow } from '../types/quiz';
-import { normalizeSectionDs } from '../utils/quizEngine';
+import { getDifficultyStars, normalizeDifficultySafe, normalizeSectionDs } from '../utils/quizEngine';
 import { normalizeQuestionList } from '../utils/quizNormalizer';
 import { CodeBlock, RichContent, SafeSvgBlock } from './RichContent';
 
@@ -30,17 +30,19 @@ const SAMPLE_MULTI_TYPE_JSON = JSON.stringify(
     {
       type: 'qcm',
       themes: ['Allocation dynamique', 'Pointeurs'],
+      difficulte: 1,
       question: 'Quelle fonction libère correctement un bloc alloué par `malloc` ?',
       code: 'int *p = malloc(10 * sizeof(int));\n// ... utilisation ...\nfree(p);\np = NULL;',
       lang: 'c',
       options: ['free(p)', 'delete p', 'release(p)', 'clear(p)'],
-      answer: 'A',
+      reponse_index: 0,
       explication:
         'En C, toute allocation dynamique (`malloc`, `calloc`, `realloc`) se libère via `free(p)`.',
     },
     {
       type: 'calcul',
       themes: ['Filtres analogiques', 'Bode & Décibels'],
+      difficulte: 2,
       question:
         'Pour $R = 2\\,\\text{k}\\Omega$ et $C = 100\\,\\text{nF}$, calculez $f_c = \\frac{1}{2\\pi R C}$ en Hz.',
       svg: '<svg viewBox="0 0 240 70"><line x1="10" y1="24" x2="60" y2="24" stroke="currentColor" stroke-width="2"/><rect x="60" y="14" width="54" height="20" fill="none" stroke="currentColor" stroke-width="2"/><text x="87" y="28" text-anchor="middle" font-size="11" fill="currentColor">R</text><line x1="114" y1="24" x2="220" y2="24" stroke="currentColor" stroke-width="2"/><line x1="156" y1="24" x2="156" y2="40" stroke="currentColor" stroke-width="2"/><line x1="142" y1="40" x2="170" y2="40" stroke="var(--accent)" stroke-width="2.5"/><line x1="142" y1="48" x2="170" y2="48" stroke="var(--accent)" stroke-width="2.5"/><line x1="156" y1="48" x2="156" y2="62" stroke="currentColor" stroke-width="2"/></svg>',
@@ -52,6 +54,7 @@ const SAMPLE_MULTI_TYPE_JSON = JSON.stringify(
     {
       type: 'ordre',
       themes: ['Architecture CPU', 'Cycle instruction'],
+      difficulte: 3,
       question: "Ordonnez les 3 étapes de base d'une instruction CPU :",
       ordre_correct: ['Fetch (lecture)', 'Decode (décodage)', 'Execute (exécution)'],
       explication: 'Le cycle fondamental de von Neumann est toujours Fetch → Decode → Execute.',
@@ -92,6 +95,8 @@ export function AdminImportModal({
   const [matiere, setMatiere] = useState('Programmation C');
   const [sectionDs, setSectionDs] = useState('DS 1');
   const [jsonText, setJsonText] = useState('');
+  const [loadedFileName, setLoadedFileName] = useState<string | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{
     kind: 'success' | 'error';
@@ -125,6 +130,15 @@ export function AdminImportModal({
     return normalizeQuestionList(jsonText, 'import');
   }, [jsonText]);
 
+  const difficultyBreakdown = useMemo(() => {
+    if (!validation?.ok) return null;
+    const counts = { 1: 0, 2: 0, 3: 0 };
+    for (const q of validation.questions) {
+      counts[normalizeDifficultySafe(q.difficulte)] += 1;
+    }
+    return counts;
+  }, [validation]);
+
   if (!open) return null;
 
   const effectiveMode: ImportMode =
@@ -133,6 +147,7 @@ export function AdminImportModal({
   const resetForm = () => {
     setEditingRow(null);
     setJsonText('');
+    setLoadedFileName(null);
   };
 
   const handleSelectSubject = (nextMatiere: string) => {
@@ -149,6 +164,7 @@ export function AdminImportModal({
   const handleStartEdit = (row: QuizRow) => {
     setEditingRow(row);
     setConfirmDeleteId(null);
+    setLoadedFileName(null);
     setMatiere(row.matiere);
     setSectionDs(row.section_ds || 'DS 1');
     setJsonText(JSON.stringify(row.questions, null, 2));
@@ -170,17 +186,63 @@ export function AdminImportModal({
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const readJsonFile = (file: File) => {
+    const looksLikeJson =
+      file.name.toLowerCase().endsWith('.json') ||
+      file.type === 'application/json' ||
+      file.type === 'text/json';
+
+    if (!looksLikeJson) {
+      setStatusMsg({
+        kind: 'error',
+        text: `Le fichier « ${file.name} » n'est pas un fichier .json valide.`,
+      });
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       const content = typeof reader.result === 'string' ? reader.result : '';
       setJsonText(content);
+      setLoadedFileName(file.name);
       setStatusMsg(null);
     };
+    reader.onerror = () => {
+      setStatusMsg({
+        kind: 'error',
+        text: `Impossible de lire le fichier « ${file.name} ».`,
+      });
+    };
     reader.readAsText(file, 'utf-8');
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    readJsonFile(file);
     e.target.value = '';
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDraggingFile) setIsDraggingFile(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(false);
+  };
+
+  const handleDropFile = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFile(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      readJsonFile(file);
+    }
   };
 
   const handleSubmitSupabase = async (e: React.FormEvent) => {
@@ -556,63 +618,118 @@ export function AdminImportModal({
               )}
             </div>
 
-            {/* JSON Input & Upload Controls */}
+            {/* Prominent Drag-and-Drop / File Selector Zone for .json */}
+            <div>
+              <p className="font-mono-code text-[12px] uppercase tracking-[0.06em] text-[var(--dim)] mb-1.5">
+                Importer un fichier .json
+              </p>
+
+              <input
+                ref={fileInputRef}
+                id="import-json-file"
+                type="file"
+                accept=".json,application/json"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+
+              <div
+                onDragEnter={handleDragOver}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDropFile}
+                onClick={() => fileInputRef.current?.click()}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    fileInputRef.current?.click();
+                  }
+                }}
+                aria-label="Glisser-déposer ou sélectionner un fichier .json"
+                className={`cursor-pointer rounded-2xl border-2 border-dashed p-5 text-center transition-colors ${
+                  isDraggingFile
+                    ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                    : loadedFileName
+                      ? 'border-[var(--good)]/70 bg-[var(--good-soft)]/30 hover:border-[var(--accent)]'
+                      : 'border-[var(--line)] bg-[var(--bg)] hover:border-[var(--accent)]'
+                }`}
+              >
+                <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+                  <Upload className="h-5 w-5" />
+                </div>
+
+                {loadedFileName ? (
+                  <div className="mt-2.5">
+                    <p className="text-[14px] font-semibold text-[var(--text)]">
+                      Fichier chargé :{' '}
+                      <span className="font-mono-code text-[var(--accent)]">{loadedFileName}</span>
+                    </p>
+                    <p className="mt-0.5 text-[12.5px] text-[var(--dim)]">
+                      Cliquez ou glissez un autre fichier <code className="font-mono-code">.json</code> pour remplacer
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mt-2.5">
+                    <p className="text-[14px] font-semibold text-[var(--text)]">
+                      Glissez-déposez un fichier <code className="font-mono-code">.json</code> ici
+                    </p>
+                    <p className="mt-0.5 text-[12.5px] text-[var(--dim)]">
+                      ou cliquez pour parcourir vos fichiers (banque de questions)
+                    </p>
+                  </div>
+                )}
+
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <span className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3.5 text-[12.5px] font-semibold text-[var(--accent-ink)]">
+                    <FileJson className="h-3.5 w-3.5" />
+                    <span>Sélectionner un fichier .json</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Direct JSON Paste Editor */}
             <div>
               <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
                 <label
                   htmlFor="import-json"
                   className="font-mono-code text-[12px] uppercase tracking-[0.06em] text-[var(--dim)]"
                 >
-                  Tableau JSON des questions
+                  Ou coller le tableau JSON directement
                 </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".json,application/json"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-2.5 text-[12px] font-medium text-[var(--text)] hover:border-[var(--accent)]"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    <span>Fichier .json</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setJsonText(SAMPLE_MULTI_TYPE_JSON);
-                      setStatusMsg(null);
-                    }}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-2.5 text-[12px] font-medium text-[var(--accent)] hover:border-[var(--accent)]"
-                  >
-                    <FileJson className="h-3.5 w-3.5" />
-                    <span>Exemple JSON</span>
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setJsonText(SAMPLE_MULTI_TYPE_JSON);
+                    setLoadedFileName(null);
+                    setStatusMsg(null);
+                  }}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-2.5 text-[12px] font-medium text-[var(--accent)] hover:border-[var(--accent)]"
+                >
+                  <FileJson className="h-3.5 w-3.5" />
+                  <span>Exemple JSON</span>
+                </button>
               </div>
 
               <textarea
                 id="import-json"
-                rows={7}
+                rows={6}
                 value={jsonText}
                 onChange={(e) => {
                   setJsonText(e.target.value);
+                  if (loadedFileName) setLoadedFileName(null);
                   setStatusMsg(null);
                 }}
-                placeholder='[ { "type": "qcm", "themes": ["Pointeurs", "Allocation dynamique"], "question": "...", "options": [...], "answer": "A", "explication": "..." } ]'
+                placeholder='[ { "type": "qcm", "themes": ["Pointeurs"], "difficulte": 2, "question": "...", "options": [...], "reponse_index": 0, "explication": "..." } ]'
                 className="w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 font-mono-code text-[12.5px] leading-[1.5] text-[var(--text)]"
               />
 
               <p className="mt-1.5 text-[12px] text-[var(--dim)]">
-                Ajoutez{' '}
-                <code className="font-mono-code">
-                  &quot;themes&quot;: [&quot;Thème 1&quot;, &quot;Thème 2&quot;]
-                </code>{' '}
-                à chaque question. Types supportés : <code className="font-mono-code">qcm</code>,{' '}
+                Champs supportés : <code className="font-mono-code">&quot;themes&quot;</code>,{' '}
+                <code className="font-mono-code">&quot;difficulte&quot;</code> (1, 2 ou 3 — défaut 2),{' '}
+                <code className="font-mono-code">qcm</code>,{' '}
                 <code className="font-mono-code">vrai_faux</code>,{' '}
                 <code className="font-mono-code">calcul</code>,{' '}
                 <code className="font-mono-code">ordre</code> + KaTeX, code et{' '}
@@ -631,22 +748,35 @@ export function AdminImportModal({
               >
                 {validation.ok ? (
                   <div>
-                    <p className="flex items-center gap-1.5 font-semibold text-[var(--good)]">
-                      <CheckCircle2 className="h-4 w-4 shrink-0" />
-                      <span>
-                        Format valide : {validation.questions.length} question
-                        {validation.questions.length > 1 ? 's' : ''} prête
-                        {validation.questions.length > 1 ? 's' : ''}
-                        {effectiveMode === 'merge' && !editingRow
-                          ? ` (total après fusion : ${targetSectionExistingCount + validation.questions.length})`
-                          : ''}
-                      </span>
-                    </p>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="flex items-center gap-1.5 font-semibold text-[var(--good)]">
+                        <CheckCircle2 className="h-4 w-4 shrink-0" />
+                        <span>
+                          Format valide : {validation.questions.length} question
+                          {validation.questions.length > 1 ? 's' : ''} prête
+                          {validation.questions.length > 1 ? 's' : ''}
+                          {effectiveMode === 'merge' && !editingRow
+                            ? ` (total après fusion : ${targetSectionExistingCount + validation.questions.length})`
+                            : ''}
+                        </span>
+                      </p>
+
+                      {difficultyBreakdown && (
+                        <span className="font-mono-code text-[11.5px] text-[var(--dim)] tabular-nums">
+                          1⭐: {difficultyBreakdown[1]} · 2⭐⭐: {difficultyBreakdown[2]} · 3⭐⭐⭐:{' '}
+                          {difficultyBreakdown[3]}
+                        </span>
+                      )}
+                    </div>
+
                     {validation.questions[0] && (
                       <div className="mt-2.5 max-h-44 overflow-y-auto rounded-lg border border-[var(--line)] bg-[var(--surface)] p-3 text-[13px]">
                         <p className="font-mono-code text-[11px] uppercase text-[var(--warm)] mb-1">
                           Aperçu Q1 · {validation.questions[0].type} ·{' '}
-                          {validation.questions[0].themes.join(' / ')}
+                          {validation.questions[0].themes.join(' / ')} ·{' '}
+                          {getDifficultyStars(
+                            normalizeDifficultySafe(validation.questions[0].difficulte)
+                          )}
                         </p>
                         <RichContent text={validation.questions[0].ask} />
                         {validation.questions[0].svg && (

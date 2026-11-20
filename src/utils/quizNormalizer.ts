@@ -1,5 +1,7 @@
-import type { CodeLanguage, QuestionType, QuizQuestion } from '../types/quiz';
+import type { CodeLanguage, DifficultyLevel, QuestionType, QuizQuestion } from '../types/quiz';
 import { detectCodeLanguage } from './codeHighlight';
+
+export const DEFAULT_DIFFICULTY: DifficultyLevel = 2;
 
 export interface NormalizationResult {
   ok: boolean;
@@ -52,6 +54,26 @@ export function normalizeThemes(rawThemes: unknown, fallbackConcept?: string): s
   }
 
   return unique.length > 0 ? unique : ['Général'];
+}
+
+export function normalizeDifficulty(raw: unknown): { value: DifficultyLevel; valid: boolean } {
+  if (raw === undefined || raw === null || raw === '') {
+    return { value: DEFAULT_DIFFICULTY, valid: true };
+  }
+  if (typeof raw === 'number') {
+    if (raw === 1 || raw === 2 || raw === 3) {
+      return { value: raw, valid: true };
+    }
+    return { value: DEFAULT_DIFFICULTY, valid: false };
+  }
+  if (typeof raw === 'string') {
+    const cleaned = raw.trim();
+    if (cleaned === '1') return { value: 1, valid: true };
+    if (cleaned === '2') return { value: 2, valid: true };
+    if (cleaned === '3') return { value: 3, valid: true };
+    return { value: DEFAULT_DIFFICULTY, valid: false };
+  }
+  return { value: DEFAULT_DIFFICULTY, valid: false };
 }
 
 export function normalizeQuestionType(raw: unknown, rec: Record<string, unknown>): QuestionType {
@@ -245,6 +267,13 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
       concept
     );
 
+    const diffCheck = normalizeDifficulty(rec.difficulte ?? rec.difficulté ?? rec.difficulty);
+    if (!diffCheck.valid) {
+      errors.push(`${label} : champ "difficulte" invalide (entier attendu : 1, 2 ou 3).`);
+      return;
+    }
+    const difficulte = diffCheck.value;
+
     const stdin =
       typeof rec.stdin === 'string' && rec.stdin.length > 0 ? rec.stdin : undefined;
 
@@ -273,6 +302,7 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
         id,
         type: 'ordre',
         themes,
+        difficulte,
         ask,
         concept,
         code,
@@ -315,6 +345,7 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
         id,
         type: 'calcul',
         themes,
+        difficulte,
         ask,
         concept,
         code,
@@ -368,6 +399,7 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
       id,
       type: qType,
       themes,
+      difficulte,
       ask,
       concept,
       code,

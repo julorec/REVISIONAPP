@@ -4,6 +4,7 @@ import type { HydratedQuestion, QuizQuestion, QuizRow } from '../types/quiz';
 import {
   buildSubjectSummaries,
   computeQuizResult,
+  countMatchingFilteredQuestions,
   evaluateAnswer,
   getShuffledOrderItems,
   isCalculAnswerCorrect,
@@ -37,6 +38,7 @@ test('evaluateAnswer handles qcm, vrai_faux, calcul (numeric & options), and ord
     id: '1',
     type: 'qcm',
     themes: ['Pointeurs'],
+    difficulte: 1,
     ask: 'QCM',
     opts: ['A', 'B'],
     ans: 1,
@@ -50,6 +52,7 @@ test('evaluateAnswer handles qcm, vrai_faux, calcul (numeric & options), and ord
     id: '2',
     type: 'calcul',
     themes: ['Filtres', 'Bode'],
+    difficulte: 2,
     ask: 'Calc',
     reponse_numerique: 1591.5,
     unite: 'Hz',
@@ -64,6 +67,7 @@ test('evaluateAnswer handles qcm, vrai_faux, calcul (numeric & options), and ord
     id: '3',
     type: 'calcul',
     themes: ['Bode'],
+    difficulte: 2,
     ask: 'Calc QCM',
     opts: ['10', '20'],
     ans: 0,
@@ -77,6 +81,7 @@ test('evaluateAnswer handles qcm, vrai_faux, calcul (numeric & options), and ord
     id: '4',
     type: 'ordre',
     themes: ['Compilation'],
+    difficulte: 3,
     ask: 'Ordre',
     ordre_correct: ['A', 'B', 'C'],
     why: 'w',
@@ -265,3 +270,52 @@ test('mergeQuestionsIntoBatch appends incoming questions without overwriting exi
   assert.notEqual(merged[1].id, merged[0].id);
   assert.equal(merged[2].id, 'q2');
 });
+
+test('combinable theme and difficulty filters default missing difficulte to 2 and intersect accurately', () => {
+  const rows: QuizRow[] = [
+    {
+      id: 'c-ds1',
+      matiere: 'Programmation C',
+      section_ds: 'DS 1',
+      chapitre: 'DS 1',
+      questions: [
+        { id: '1', type: 'qcm', themes: ['Pointeurs'], difficulte: 1, ask: 'P1', opts: ['A', 'B'], ans: 0, why: 'ok' },
+        { id: '2', type: 'qcm', themes: ['Pointeurs'], ask: 'P2 legacy (defaults to 2)', opts: ['A', 'B'], ans: 0, why: 'ok' },
+        { id: '3', type: 'qcm', themes: ['Pointeurs'], difficulte: 3, ask: 'P3', opts: ['A', 'B'], ans: 0, why: 'ok' },
+        { id: '4', type: 'qcm', themes: ['Bitwise'], difficulte: 1, ask: 'B1', opts: ['A', 'B'], ans: 0, why: 'ok' },
+        { id: '5', type: 'qcm', themes: ['Bitwise'], difficulte: 3, ask: 'B3', opts: ['A', 'B'], ans: 0, why: 'ok' },
+      ],
+    },
+  ];
+
+  const summaries = buildSubjectSummaries(rows, {});
+  assert.deepEqual(summaries[0].sections[0].difficultyCounts, { 1: 2, 2: 1, 3: 2 });
+
+  // Theme = Pointeurs AND Difficulty = [2, 3] -> Q2 (legacy default 2) + Q3 (3)
+  assert.equal(
+    countMatchingFilteredQuestions(rows, 'Programmation C', 'DS 1', ['Pointeurs'], [2, 3]),
+    2
+  );
+  const picked = selectQuizQuestions(rows, {
+    matiere: 'Programmation C',
+    section_ds: 'DS 1',
+    themes: ['Pointeurs'],
+    difficulties: [2, 3],
+    mode: 'themes',
+  });
+  assert.equal(picked.length, 2);
+  assert.equal(picked.every((q) => q.themes.includes('Pointeurs') && (q.difficulte === 2 || q.difficulte === 3)), true);
+
+  // Theme = Bitwise AND Difficulty = [2] -> 0 questions
+  assert.equal(
+    countMatchingFilteredQuestions(rows, 'Programmation C', 'DS 1', ['Bitwise'], [2]),
+    0
+  );
+
+  // Difficulty only = [1, 3] across all themes -> 4 questions
+  assert.equal(
+    countMatchingFilteredQuestions(rows, 'Programmation C', 'DS 1', [], [1, 3]),
+    4
+  );
+});
+

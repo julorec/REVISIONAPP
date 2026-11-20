@@ -1,4 +1,5 @@
 import type {
+  DifficultyLevel,
   ExamSize,
   HydratedQuestion,
   ProgressMap,
@@ -12,11 +13,36 @@ import type {
   UserAnswer,
 } from '../types/quiz';
 import { computeQuizPoints } from './leaderboard';
-import { normalizeThemes } from './quizNormalizer';
+import { DEFAULT_DIFFICULTY, normalizeDifficulty, normalizeThemes } from './quizNormalizer';
 
 export const EXAM_QUESTION_LIMIT: ExamSize = 20;
 export const DEFAULT_NUMERIC_TOLERANCE = 0.05; // ±5%
 export const DEFAULT_SECTION_DS = 'DS 1';
+
+export function normalizeDifficultySafe(raw: unknown): DifficultyLevel {
+  const res = normalizeDifficulty(raw);
+  return res.valid ? res.value : DEFAULT_DIFFICULTY;
+}
+
+export function getDifficultyStars(level: DifficultyLevel): string {
+  if (level === 1) return '⭐';
+  if (level === 3) return '⭐⭐⭐';
+  return '⭐⭐';
+}
+
+export function getDifficultyLabel(level: DifficultyLevel): {
+  short: string;
+  full: string;
+  stars: string;
+} {
+  if (level === 1) {
+    return { short: 'Bases', full: 'Facile · Bases du cours', stars: '⭐' };
+  }
+  if (level === 3) {
+    return { short: 'Partiel', full: 'Difficile · Niveau Partiel & Pièges', stars: '⭐⭐⭐' };
+  }
+  return { short: 'TD', full: 'Intermédiaire · Application TD', stars: '⭐⭐' };
+}
 
 export function normalizeSectionDs(raw: unknown): string {
   if (typeof raw === 'string' && raw.trim().length > 0) {
@@ -124,9 +150,11 @@ export function hydrateQuestions(rows: QuizRow[]): HydratedQuestion[] {
     for (let i = 0; i < row.questions.length; i++) {
       const q = row.questions[i];
       const themes = normalizeThemes(q.themes, q.concept || row.chapitre);
+      const difficulte = normalizeDifficultySafe(q.difficulte);
       result.push({
         ...q,
         themes,
+        difficulte,
         id: q.id.startsWith(`${row.id}:`) ? q.id : `${row.id}:${q.id}`,
         matiere: row.matiere,
         section_ds: sectionDs,
@@ -193,16 +221,39 @@ export function filterQuestionsByThemes(
   );
 }
 
+/**
+ * Filters questions by one or more difficulty levels (empty = all levels).
+ */
+export function filterQuestionsByDifficulties(
+  questions: HydratedQuestion[],
+  selectedDifficulties: DifficultyLevel[]
+): HydratedQuestion[] {
+  if (selectedDifficulties.length === 0) return questions;
+  const allowed = new Set<DifficultyLevel>(selectedDifficulties);
+  return questions.filter((q) => allowed.has(normalizeDifficultySafe(q.difficulte)));
+}
+
+export function countMatchingFilteredQuestions(
+  rows: QuizRow[],
+  matiere: string,
+  sectionDs: string,
+  selectedThemes: string[],
+  selectedDifficulties: DifficultyLevel[] = []
+): number {
+  const pool = hydrateQuestions(
+    rows.filter((r) => r.matiere === matiere && normalizeSectionDs(r.section_ds) === sectionDs)
+  );
+  const byThemes = filterQuestionsByThemes(pool, selectedThemes);
+  return filterQuestionsByDifficulties(byThemes, selectedDifficulties).length;
+}
+
 export function countMatchingThemeQuestions(
   rows: QuizRow[],
   matiere: string,
   sectionDs: string,
   selectedThemes: string[]
 ): number {
-  const pool = hydrateQuestions(
-    rows.filter((r) => r.matiere === matiere && normalizeSectionDs(r.section_ds) === sectionDs)
-  );
-  return filterQuestionsByThemes(pool, selectedThemes).length;
+  return countMatchingFilteredQuestions(rows, matiere, sectionDs, selectedThemes, []);
 }
 
 /**
@@ -229,6 +280,7 @@ export function mergeQuestionsIntoBatch(
       ...q,
       id: candidateId,
       themes: normalizeThemes(q.themes, q.concept),
+      difficulte: normalizeDifficultySafe(q.difficulte),
     });
   }
 
@@ -281,8 +333,10 @@ export function buildSubjectSummaries(
         let secTries = 0;
         let secRight = 0;
         let secMissed = 0;
+        const difficultyCounts: Record<DifficultyLevel, number> = { 1: 0, 2: 0, 3: 0 };
 
         for (const q of secQuestions) {
+          difficultyCounts[q.difficulte] += 1;
           const stat = progress[q.id];
           if (stat && stat.tries > 0) secSeen += 1;
           if (stat) {
@@ -300,6 +354,7 @@ export function buildSubjectSummaries(
           triesCount: secTries,
           missedCount: secMissed,
           themes: extractSectionThemes(secQuestions, progress),
+          difficultyCounts,
         };
       })
       .sort((a, b) => a.section_ds.localeCompare(b.section_ds, 'fr', { numeric: true }));
@@ -325,6 +380,7 @@ export interface FilterCriteria {
   matiere: string;
   section_ds?: string; // 'all' or exact section_ds
   themes?: string[]; // empty or omitted = all themes in DS
+  difficulties?: DifficultyLevel[]; // empty or omitted = all difficulty levels
   mode: QuizMode;
   examSize?: ExamSize;
 }
@@ -346,9 +402,12 @@ export function selectQuizQuestions(
     return shuffleArray(pool, rng).slice(0, Math.min(limit, pool.length));
   }
 
-  // Mode Thèmes: filter by selected themes (if any) and shuffle for training
+  // Mode Entraînement: combinable filters on Grands Thèmes + Difficulté
   if (criteria.themes && criteria.themes.length > 0) {
     pool = filterQuestionsByThemes(pool, criteria.themes);
+  }
+  if (criteria.difficulties && criteria.difficulties.length > 0) {
+    pool = filterQuestionsByDifficulties(pool, criteria.difficulties);
   }
 
   return shuffleArray(pool, rng);

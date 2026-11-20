@@ -15,6 +15,7 @@ import {
   DEFAULT_NUMERIC_TOLERANCE,
   evaluateAnswer,
   getCalculBounds,
+  getDifficultyLabel,
   getShuffledOrderItems,
   isChoiceQuestion,
   parseNumericInput,
@@ -309,10 +310,25 @@ export function QuizSession({
 
       {/* Main Question Card */}
       <article className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5 sm:p-6">
-        {/* Kicker metadata (zero pills — clean uppercase mono separated by middots) */}
-        <p className="font-mono-code text-[11.5px] font-medium uppercase tracking-[0.06em] text-[var(--warm)]">
-          {current.section_ds} · {current.themes.join(' / ')} · {getTypeLabel(current)}
-        </p>
+        {/* Kicker metadata + discreet difficulty star badge */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-mono-code text-[11.5px] font-medium uppercase tracking-[0.06em] text-[var(--warm)]">
+            {current.section_ds} · {current.themes.join(' / ')} · {getTypeLabel(current)}
+          </p>
+          {(() => {
+            const diff = getDifficultyLabel(current.difficulte);
+            return (
+              <span
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface-2)] px-2 py-0.5 font-mono-code text-[11px] font-medium text-[var(--dim)] shrink-0"
+                title={`Difficulté ${current.difficulte}/3 — ${diff.full}`}
+                aria-label={`Difficulté ${current.difficulte} sur 3 : ${diff.full}`}
+              >
+                <span aria-hidden="true">{diff.stars}</span>
+                <span className="hidden sm:inline">{diff.short}</span>
+              </span>
+            );
+          })()}
+        </div>
 
         {/* Prompt */}
         <div className="mt-2.5 text-[16.5px] sm:text-[17.5px] font-semibold leading-[1.5] text-[var(--text)]">

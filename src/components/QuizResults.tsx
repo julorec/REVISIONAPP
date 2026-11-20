@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, Check, RotateCcw, Shuffle, Trophy, X } from 'lucide-react';
 import type { HydratedQuestion, QuizResultSummary, UserAnswer } from '../types/quiz';
-import { evaluateAnswer, isChoiceQuestion } from '../utils/quizEngine';
+import { evaluateAnswer, getDifficultyStars, isChoiceQuestion } from '../utils/quizEngine';
 import { CodeBlock, RichContent, SafeSvgBlock } from './RichContent';
 
 interface QuizResultsProps {
@@ -235,7 +235,10 @@ export function QuizResults({
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-mono-code text-[11.5px] uppercase tracking-[0.06em] text-[var(--dim)]">
-                    Q{number} · {q.section_ds} · {q.themes.join(' / ')}
+                    Q{number} · {q.section_ds} · {q.themes.join(' / ')} ·{' '}
+                    <span aria-label={`Difficulté ${q.difficulte} sur 3`}>
+                      {getDifficultyStars(q.difficulte)}
+                    </span>
                   </span>
                   <span
                     className={`inline-flex items-center gap-1 font-mono-code text-[12px] font-semibold ${

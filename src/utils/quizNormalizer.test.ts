@@ -151,5 +151,32 @@ test('normalizeQuestionList accepts reponse_index, reponse, answer, and ans acro
     res.questions.map((q) => q.ans),
     [2, 0, 1, 2, 1, 0]
   );
+  // Backwards compatibility: omitted difficulte defaults to 2
+  assert.deepEqual(
+    res.questions.map((q) => q.difficulte),
+    [2, 2, 2, 2, 2, 2]
+  );
 });
+
+test('normalizeQuestionList validates difficulte (1, 2, 3), defaults missing to 2, and rejects out-of-range values', () => {
+  const valid = normalizeQuestionList([
+    { type: 'qcm', question: 'Facile', options: ['A', 'B'], reponse_index: 0, difficulte: 1 },
+    { type: 'qcm', question: 'Sans champ', options: ['A', 'B'], reponse_index: 1 },
+    { type: 'calcul', question: 'Partiel', reponse_numerique: 42, difficulte: 3 },
+    { type: 'ordre', question: 'String 2', ordre_correct: ['1', '2'], difficulte: '2' },
+  ]);
+  assert.equal(valid.ok, true, valid.errors.join('; '));
+  assert.deepEqual(
+    valid.questions.map((q) => q.difficulte),
+    [1, 2, 3, 2]
+  );
+
+  const invalid = normalizeQuestionList([
+    { type: 'qcm', question: 'Trop haut', options: ['A', 'B'], reponse_index: 0, difficulte: 4 },
+    { type: 'qcm', question: 'Zero', options: ['A', 'B'], reponse_index: 0, difficulte: 0 },
+  ]);
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.errors.length, 2);
+});
+
 
