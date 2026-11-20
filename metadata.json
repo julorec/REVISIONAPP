@@ -1,0 +1,6 @@
+{
+  "name": "Coach Partiels — INSA Rennes ESET 3A",
+  "description": "Application PWA mobile-first de révision pour les partiels INSA Rennes ESET 3A connectée à Supabase, avec coloration C, formules KaTeX et mode examen.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

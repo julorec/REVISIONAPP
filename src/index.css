@@ -1,0 +1,138 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f5f6fa;
+  --surface: #ffffff;
+  --surface-2: #eef0f6;
+  --text: #161a24;
+  --dim: #566077;
+  --line: #dde1ea;
+  --accent: #2e7d6b;
+  --accent-hover: #246556;
+  --accent-ink: #ffffff;
+  --accent-soft: #e1f2ee;
+  --warm: #c46a1f;
+  --warm-soft: #fbe9d8;
+  --good: #1f8a5a;
+  --good-soft: #e3f5ec;
+  --bad: #c73f3f;
+  --bad-soft: #fce9e9;
+
+  /* C Syntax highlighting tokens (faithful to Coach Partiels artifact) */
+  --hl-k: #8a3fa0;
+  --hl-s: #1f7a4d;
+  --hl-n: #b3541a;
+  --hl-c: #6b7690;
+  --hl-p: #2a62b8;
+  --hl-fn: #1d5b8a;
+  --hl-op: #9b4b18;
+
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+:root.dark {
+  --bg: #0d1117;
+  --surface: #141b1a;
+  --surface-2: #182422;
+  --text: #e6e9f2;
+  --dim: #94a0bd;
+  --line: #28382f;
+  --accent: #5fc9ae;
+  --accent-hover: #4db89d;
+  --accent-ink: #0b1512;
+  --accent-soft: #16302a;
+  --warm: #e39a52;
+  --warm-soft: #3a2c1a;
+  --good: #4cc38a;
+  --good-soft: #123326;
+  --bad: #f2726a;
+  --bad-soft: #3a1c1c;
+
+  --hl-k: #c792e0;
+  --hl-s: #7fd1a0;
+  --hl-n: #e8a06a;
+  --hl-c: #8693ad;
+  --hl-p: #7fb0ee;
+  --hl-fn: #73c0e8;
+  --hl-op: #eab072;
+  color-scheme: dark;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    background-color: var(--bg);
+    color: var(--text);
+    -webkit-tap-highlight-color: transparent;
+    scroll-padding-top: calc(env(safe-area-inset-top, 0px) + 64px);
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+
+  code, pre, kbd {
+    font-family: var(--font-mono);
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+.font-mono-code {
+  font-family: var(--font-mono);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* C Code Syntax Highlighting Classes */
+.hl-k { color: var(--hl-k); font-weight: 500; }
+.hl-s { color: var(--hl-s); }
+.hl-n { color: var(--hl-n); }
+.hl-c { color: var(--hl-c); font-style: italic; }
+.hl-p { color: var(--hl-p); font-weight: 500; }
+.hl-fn { color: var(--hl-fn); }
+.hl-op { color: var(--hl-op); font-weight: 500; }
+
+/* KaTeX responsive overflow container */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35rem 0;
+  margin: 0.65rem 0;
+}
+
+.katex {
+  font-size: 1.05em;
+  color: inherit;
+}
+
+/* Safe area helpers for iOS PWA */
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}

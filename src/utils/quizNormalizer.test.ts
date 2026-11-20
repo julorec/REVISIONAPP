@@ -1,0 +1,89 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { normalizeQuestionList, normalizeSourceType } from './quizNormalizer';
+
+test('normalizeSourceType classifies Cours vs Annales', () => {
+  assert.equal(normalizeSourceType('Cours'), 'Cours');
+  assert.equal(normalizeSourceType('annales 2025'), 'Annales');
+  assert.equal(normalizeSourceType('Partiel DS'), 'Annales');
+});
+
+test('normalizeQuestionList handles qcm, vrai_faux, calcul (numeric & options), ordre, svg, and lang', () => {
+  const payload = JSON.stringify([
+    {
+      type: 'qcm',
+      question: 'Que vaut `x` ?',
+      code: 'int x = 1 << 3;',
+      options: ['4', '8', '16'],
+      answer: 'B',
+      explication: 'Décalage de 3 bits à gauche.',
+    },
+    {
+      type: 'vrai_faux',
+      question: 'free(NULL) provoque un segfault.',
+      reponse: false,
+      explication: 'La norme C garantit que free(NULL) est sans effet.',
+    },
+    {
+      type: 'calcul',
+      question: 'Calculez $f_c$ pour $R=1\\,\\text{k}\\Omega$, $C=100\\,\\text{nF}$.',
+      reponse_numerique: 1591.5,
+      unite: 'Hz',
+      svg: '<svg viewBox="0 0 100 40"><rect width="20" height="10"/></svg>',
+      explication: '$f_c = \\frac{1}{2\\pi RC}$.',
+    },
+    {
+      type: 'calcul',
+      question: 'Calcul avec options explicites',
+      options: ['10 Hz', '20 Hz', '40 Hz'],
+      ans: 1,
+      unite: 'Hz',
+      why: 'Bascule en choix multiples quand options est fourni.',
+    },
+    {
+      type: 'ordre',
+      question: 'Ordonnez les étapes de compilation C :',
+      ordre_correct: ['Préprocesseur', 'Compilateur', 'Assembleur', 'Éditeur de liens'],
+      why: 'Chaîne GCC classique.',
+    },
+  ]);
+
+  const res = normalizeQuestionList(payload, 'test');
+  assert.equal(res.ok, true, res.errors.join('; '));
+  assert.equal(res.questions.length, 5);
+
+  assert.equal(res.questions[0].type, 'qcm');
+  assert.equal(res.questions[0].ans, 1);
+  assert.equal(res.questions[0].lang, 'c');
+
+  assert.equal(res.questions[1].type, 'vrai_faux');
+  assert.deepEqual(res.questions[1].opts, ['Vrai', 'Faux']);
+  assert.equal(res.questions[1].ans, 1);
+
+  assert.equal(res.questions[2].type, 'calcul');
+  assert.equal(res.questions[2].reponse_numerique, 1591.5);
+  assert.equal(res.questions[2].unite, 'Hz');
+  assert.equal(res.questions[2].tolerance, 0.05);
+  assert.ok(res.questions[2].svg?.includes('<svg'));
+
+  assert.equal(res.questions[3].type, 'calcul');
+  assert.deepEqual(res.questions[3].opts, ['10 Hz', '20 Hz', '40 Hz']);
+  assert.equal(res.questions[3].ans, 1);
+
+  assert.equal(res.questions[4].type, 'ordre');
+  assert.deepEqual(res.questions[4].ordre_correct, [
+    'Préprocesseur',
+    'Compilateur',
+    'Assembleur',
+    'Éditeur de liens',
+  ]);
+});
+
+test('normalizeQuestionList rejects invalid calcul and ordre schemas with clear errors', () => {
+  const res = normalizeQuestionList([
+    { type: 'calcul', question: 'Manque reponse_numerique' },
+    { type: 'ordre', question: 'Trop court', ordre_correct: ['Seul'] },
+  ]);
+  assert.equal(res.ok, false);
+  assert.equal(res.errors.length, 2);
+});
