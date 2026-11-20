@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { HydratedQuestion, QuizQuestion, QuizRow } from '../types/quiz';
+import type { HydratedQuestion, ProgressMap, QuizQuestion, QuizRow, SubjectRecord } from '../types/quiz';
 import {
   buildSubjectSummaries,
+  computeDsSelectionStats,
   computeQuizResult,
   countMatchingFilteredQuestions,
   evaluateAnswer,
@@ -11,7 +12,9 @@ import {
   isChoiceQuestion,
   mergeQuestionsIntoBatch,
   parseNumericInput,
+  selectDsQuizQuestions,
   selectQuizQuestions,
+  slugifySubjectName,
 } from './quizEngine';
 
 test('parseNumericInput supports French commas, spaces, and scientific notation', () => {
@@ -318,4 +321,154 @@ test('combinable theme and difficulty filters default missing difficulte to 2 an
     4
   );
 });
+
+test('slugifySubjectName normalizes French accents and punctuation', () => {
+  assert.equal(slugifySubjectName('Langage C'), 'langage-c');
+  assert.equal(slugifySubjectName('Prog Systèmes'), 'prog-systemes');
+  assert.equal(slugifySubjectName('Maths'), 'maths');
+  assert.equal(slugifySubjectName('TTSD'), 'ttsd');
+  assert.equal(slugifySubjectName('Électronique & Signal'), 'electronique-signal');
+});
+
+test('buildSubjectSummaries keeps registered 0-quiz subjects in display_order and calculates masteryRate', () => {
+  const registeredSubjects: SubjectRecord[] = [
+    { id: 's1', name: 'Langage C', slug: 'langage-c', cover_image_url: 'https://cdn/c.jpg', display_order: 1 },
+    { id: 's2', name: 'Prog Systèmes', slug: 'prog-systemes', cover_image_url: null, display_order: 2 },
+    { id: 's3', name: 'Maths', slug: 'maths', cover_image_url: null, display_order: 3 },
+    { id: 's4', name: 'TTSD', slug: 'ttsd', cover_image_url: null, display_order: 4 },
+  ];
+
+  const rows: QuizRow[] = [
+    {
+      id: 'q-c-1',
+      matiere: 'Langage C',
+      section_ds: 'DS 1',
+      chapitre: 'DS 1',
+      questions: [
+        { id: '1', type: 'qcm', themes: ['Pointeurs'], difficulte: 1, ask: 'Q1', opts: ['A', 'B'], ans: 0, why: 'ok' },
+        { id: '2', type: 'qcm', themes: ['Pointeurs'], difficulte: 2, ask: 'Q2', opts: ['A', 'B'], ans: 0, why: 'ok' },
+        { id: '3', type: 'qcm', themes: ['Memoire'], difficulte: 3, ask: 'Q3', opts: ['A', 'B'], ans: 0, why: 'ok' },
+        { id: '4', type: 'qcm', themes: ['Memoire'], difficulte: 2, ask: 'Q4', opts: ['A', 'B'], ans: 0, why: 'ok' },
+      ],
+    },
+  ];
+
+  const progress: ProgressMap = {
+    'q-c-1:1': { tries: 2, right: 2, lastOk: true, updatedAt: 1 },
+    'q-c-1:2': { tries: 1, right: 1, lastOk: true, updatedAt: 2 },
+    'q-c-1:3': { tries: 1, right: 0, lastOk: false, updatedAt: 3 },
+  };
+
+  const summaries = buildSubjectSummaries(rows, progress, registeredSubjects);
+  assert.deepEqual(
+    summaries.map((s) => s.matiere),
+    ['Langage C', 'Prog Systèmes', 'Maths', 'TTSD']
+  );
+
+  // Langage C has 4 questions, 2 mastered (lastOk: true) -> 50% mastery
+  assert.equal(summaries[0].cover_image_url, 'https://cdn/c.jpg');
+  assert.equal(summaries[0].totalQuestions, 4);
+  assert.equal(summaries[0].sections.length, 1);
+  assert.equal(summaries[0].sections[0].masteryRate, 50);
+  assert.equal(summaries[0].sections[0].missedCount, 1);
+
+  // Subjects with 0 quizzes still render with empty sections
+  assert.equal(summaries[1].totalQuestions, 0);
+  assert.equal(summaries[1].sections.length, 0);
+  assert.equal(summaries[2].slug, 'maths');
+  assert.equal(summaries[3].slug, 'ttsd');
+});
+
+test('selectDsQuizQuestions and computeDsSelectionStats handle standard, exam, and errors modes', () => {
+  const rows: QuizRow[] = [
+    {
+      id: 'c-ds1',
+      matiere: 'Langage C',
+      section_ds: 'DS 1',
+      chapitre: 'DS 1',
+      questions: Array.from({ length: 25 }, (_, i) => ({
+        id: `q${i + 1}`,
+        type: 'qcm' as const,
+        themes: i < 12 ? ['Pointeurs'] : ['Memoire'],
+        difficulte: ((i % 3) + 1) as 1 | 2 | 3,
+        ask: `Question ${i + 1}`,
+        opts: ['A', 'B'],
+        ans: 0,
+        why: 'ok',
+      })),
+    },
+  ];
+
+  const progress: ProgressMap = {
+    'c-ds1:q1': { tries: 1, right: 0, lastOk: false, updatedAt: 1 },
+    'c-ds1:q2': { tries: 1, right: 0, lastOk: false, updatedAt: 2 },
+    'c-ds1:q3': { tries: 2, right: 2, lastOk: true, updatedAt: 3 },
+  };
+
+  // Mode Examen: always caps at 20 questions across entire DS, ignoring theme/difficulty/count filters
+  const examStats = computeDsSelectionStats(rows, progress, {
+    matiere: 'Langage C',
+    section_ds: 'DS 1',
+    mode: 'exam',
+    themes: ['Pointeurs'],
+    difficulties: [1],
+    count: 10,
+  });
+  assert.equal(examStats.availableForMode, 25);
+  assert.equal(examStats.effectiveCount, 20);
+  const examPicked = selectDsQuizQuestions(rows, progress, {
+    matiere: 'Langage C',
+    section_ds: 'DS 1',
+    mode: 'exam',
+    themes: ['Pointeurs'],
+    difficulties: [1],
+    count: 10,
+  });
+  assert.equal(examPicked.length, 20);
+
+  // Mode Mes Erreurs: only 2 missed questions
+  const errStats = computeDsSelectionStats(rows, progress, {
+    matiere: 'Langage C',
+    section_ds: 'DS 1',
+    mode: 'errors',
+    themes: [],
+    difficulties: [],
+    count: 20,
+  });
+  assert.equal(errStats.missedInSection, 2);
+  assert.equal(errStats.effectiveCount, 2);
+  const errPicked = selectDsQuizQuestions(rows, progress, {
+    matiere: 'Langage C',
+    section_ds: 'DS 1',
+    mode: 'errors',
+    themes: [],
+    difficulties: [],
+    count: 20,
+  });
+  assert.equal(errPicked.length, 2);
+  assert.deepEqual(new Set(errPicked.map((q) => q.id)), new Set(['c-ds1:q1', 'c-ds1:q2']));
+
+  // Mode Standard: Pointeurs (12q) + count 10 -> 10q; Max -> 12q
+  const std10 = selectDsQuizQuestions(rows, progress, {
+    matiere: 'Langage C',
+    section_ds: 'DS 1',
+    mode: 'standard',
+    themes: ['Pointeurs'],
+    difficulties: [],
+    count: 10,
+  });
+  assert.equal(std10.length, 10);
+  assert.equal(std10.every((q) => q.themes.includes('Pointeurs')), true);
+
+  const stdMax = selectDsQuizQuestions(rows, progress, {
+    matiere: 'Langage C',
+    section_ds: 'DS 1',
+    mode: 'standard',
+    themes: ['Pointeurs'],
+    difficulties: [],
+    count: 'max',
+  });
+  assert.equal(stdMax.length, 12);
+});
+
 

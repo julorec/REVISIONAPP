@@ -40,7 +40,7 @@ export function PseudoModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/55 p-0 sm:p-4"
+      className="fixed inset-0 z-50 flex h-[100dvh] items-end sm:items-center justify-center bg-black/55 p-0 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="pseudo-modal-title"
@@ -49,7 +49,7 @@ export function PseudoModal({
       }}
     >
       <div
-        className="w-full sm:max-w-md rounded-t-2xl sm:rounded-xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-xl"
+        className="max-h-[92dvh] w-full sm:max-w-md overflow-y-auto overscroll-contain rounded-t-2xl sm:rounded-xl border border-[var(--line)] bg-[var(--surface)] p-6 pb-safe shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
@@ -100,6 +100,12 @@ export function PseudoModal({
               autoFocus
               maxLength={32}
               value={value}
+              onFocus={(e) => {
+                const el = e.currentTarget;
+                setTimeout(() => {
+                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 120);
+              }}
               onChange={(e) => {
                 setValue(e.target.value);
                 if (error) setError(null);

@@ -1,4 +1,8 @@
-export type QuizMode = 'themes' | 'exam';
+export type QuizMode = 'themes' | 'exam' | 'standard' | 'errors';
+
+export type TrainingMode = 'standard' | 'exam' | 'errors';
+
+export type QuizCountOption = 10 | 20 | 30 | 'max';
 
 export type ExamSize = 20 | 30;
 
@@ -7,6 +11,19 @@ export type QuestionType = 'qcm' | 'vrai_faux' | 'calcul' | 'ordre';
 export type DifficultyLevel = 1 | 2 | 3;
 
 export type CodeLanguage = 'c' | 'vhdl' | 'asm' | 'python' | 'text';
+
+export interface SubjectRecord {
+  id: string;
+  name: string;
+  slug: string;
+  cover_image_url: string | null;
+  display_order: number;
+  created_at?: string;
+}
+
+export interface AppSettings {
+  home_banner_url: string | null;
+}
 
 export interface QuizQuestion {
   id: string;
@@ -106,12 +123,17 @@ export interface SectionSummary {
   rightCount: number;
   triesCount: number;
   missedCount: number;
+  masteryRate: number | null;
   themes: ThemeSummary[];
   difficultyCounts: Record<DifficultyLevel, number>;
 }
 
 export interface SubjectSummary {
+  id?: string;
+  slug: string;
   matiere: string;
+  cover_image_url: string | null;
+  display_order: number;
   totalQuestions: number;
   sections: SectionSummary[];
   seenCount: number;

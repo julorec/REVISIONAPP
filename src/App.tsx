@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Database, Lock, RefreshCw, WifiOff } from 'lucide-react';
 import { AdminImportModal } from './components/AdminImportModal';
 import { Header } from './components/Header';
-import { MobileBottomNav } from './components/MobileBottomNav';
+import { HomeHub } from './components/HomeHub';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PseudoModal } from './components/PseudoModal';
 import { QuizResults } from './components/QuizResults';
 import { QuizSession } from './components/QuizSession';
-import { SubjectTabsBar } from './components/SubjectTabsBar';
-import { SubjectWorkspace, type SubjectSubTab } from './components/SubjectWorkspace';
+import {
+  SubjectWorkspace,
+  type DsLaunchConfig,
+  type SubjectSubTab,
+} from './components/SubjectWorkspace';
 import { useTheme } from './hooks/useTheme';
 import {
+  fetchAppSettings,
   fetchQuizzes,
   fetchScores,
+  fetchSubjects,
   loadProgress,
   loadStudentPseudo,
   recordQuizScore,
@@ -21,25 +25,24 @@ import {
   subscribeToSupabaseChanges,
 } from './lib/supabase';
 import type {
-  DifficultyLevel,
-  ExamSize,
+  AppSettings,
   HydratedQuestion,
   ProgressMap,
   QuizRow,
   ScoreEntry,
+  SubjectRecord,
   UserAnswer,
 } from './types/quiz';
 import {
   buildSubjectSummaries,
   computeQuizResult,
   getDifficultyStars,
-  getMissedQuestionsForSubject,
-  selectQuizQuestions,
+  selectDsQuizQuestions,
   shuffleArray,
 } from './utils/quizEngine';
 import { shouldTriggerBackgroundSync } from './utils/syncState';
 
-type AppView = 'subject' | 'quiz' | 'results';
+type AppView = 'hub' | 'subject' | 'quiz' | 'results';
 
 interface ActiveSession {
   key: number;
@@ -59,7 +62,9 @@ export default function App() {
   const [pseudo, setPseudo] = useState<string>(() => loadStudentPseudo());
   const [pseudoModalOpen, setPseudoModalOpen] = useState<boolean>(() => !loadStudentPseudo());
 
-  // Always load real quiz rows directly from Supabase (zero local or default quiz data)
+  // Live Supabase catalog: subjects, app_settings, quizzes, scores (zero local quiz data)
+  const [registeredSubjects, setRegisteredSubjects] = useState<SubjectRecord[]>([]);
+  const [settings, setSettings] = useState<AppSettings>({ home_banner_url: null });
   const [rows, setRows] = useState<QuizRow[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
@@ -69,9 +74,10 @@ export default function App() {
   const [scoresLoading, setScoresLoading] = useState(false);
   const [progress, setProgress] = useState<ProgressMap>(() => loadProgress());
 
-  const [view, setView] = useState<AppView>('subject');
+  // 3-Level Navigation: hub -> subject (DS accordion) -> quiz -> results
+  const [view, setView] = useState<AppView>('hub');
   const [selectedMatiere, setSelectedMatiere] = useState<string>('');
-  const [activeSubTab, setActiveSubTab] = useState<SubjectSubTab>('revisions');
+  const [activeSubTab, setActiveSubTab] = useState<SubjectSubTab>('evaluations');
   const [leaderboardSectionFilter, setLeaderboardSectionFilter] = useState<string>('all');
 
   const [session, setSession] = useState<ActiveSession | null>(null);
@@ -82,15 +88,24 @@ export default function App() {
 
   const lastSyncAtRef = useRef<number>(0);
 
-  const loadQuizzes = useCallback(async (opts?: { silent?: boolean }) => {
+  const loadCatalog = useCallback(async (opts?: { silent?: boolean }) => {
     lastSyncAtRef.current = Date.now();
     if (!opts?.silent) {
       setSyncing(true);
     }
 
-    const result = await fetchQuizzes();
-    setRows(result.rows);
-    setSyncError(result.error ?? null);
+    const [quizzesRes, subjectsRes, settingsRes] = await Promise.all([
+      fetchQuizzes(),
+      fetchSubjects(),
+      fetchAppSettings(),
+    ]);
+
+    setRows(quizzesRes.rows);
+    setRegisteredSubjects(subjectsRes.subjects);
+    setSettings(settingsRes.settings);
+
+    // Only surface a connectivity banner if the core quizzes query failed
+    setSyncError(quizzesRes.error ?? null);
     setLoading(false);
     setSyncing(false);
   }, []);
@@ -106,27 +121,35 @@ export default function App() {
 
   // 1. Initial sync from Supabase on mount
   useEffect(() => {
-    void loadQuizzes();
+    void loadCatalog();
     void loadAllScores();
-  }, [loadQuizzes, loadAllScores]);
+  }, [loadCatalog, loadAllScores]);
 
-  // 2. Automatic Realtime sync whenever quizzes or scores change in Supabase
+  // 2. Automatic Realtime sync across quizzes, subjects, app_settings, and scores
   useEffect(() => {
     return subscribeToSupabaseChanges({
       onQuizzesChanged: () => {
-        void loadQuizzes({ silent: true });
+        void loadCatalog({ silent: true });
+      },
+      onSubjectsChanged: () => {
+        void loadCatalog({ silent: true });
+      },
+      onSettingsChanged: () => {
+        void loadCatalog({ silent: true });
       },
       onScoresChanged: () => {
         void loadAllScores({ silent: true });
       },
     });
-  }, [loadQuizzes, loadAllScores]);
+  }, [loadCatalog, loadAllScores]);
 
   // 3. Automatic foreground / reconnect resync (ideal for mobile PWAs waking from background)
   useEffect(() => {
     const syncIfStale = () => {
-      if (shouldTriggerBackgroundSync(lastSyncAtRef.current, Date.now(), FOREGROUND_SYNC_INTERVAL_MS)) {
-        void loadQuizzes({ silent: true });
+      if (
+        shouldTriggerBackgroundSync(lastSyncAtRef.current, Date.now(), FOREGROUND_SYNC_INTERVAL_MS)
+      ) {
+        void loadCatalog({ silent: true });
         void loadAllScores({ silent: true });
       }
     };
@@ -138,7 +161,7 @@ export default function App() {
     };
 
     const handleOnline = () => {
-      void loadQuizzes({ silent: true });
+      void loadCatalog({ silent: true });
       void loadAllScores({ silent: true });
     };
 
@@ -151,36 +174,52 @@ export default function App() {
       window.removeEventListener('focus', syncIfStale);
       window.removeEventListener('online', handleOnline);
     };
-  }, [loadQuizzes, loadAllScores]);
+  }, [loadCatalog, loadAllScores]);
 
-  const subjects = useMemo(() => buildSubjectSummaries(rows, progress), [rows, progress]);
-
-  // Keep selectedMatiere valid even if subjects are added or deleted in Supabase
-  useEffect(() => {
-    if (subjects.length === 0) {
-      if (selectedMatiere !== '') setSelectedMatiere('');
-      return;
-    }
-    if (!selectedMatiere || !subjects.some((s) => s.matiere === selectedMatiere)) {
-      setSelectedMatiere(subjects[0].matiere);
-    }
-  }, [subjects, selectedMatiere]);
-
-  const currentSubject = useMemo(
-    () => subjects.find((s) => s.matiere === selectedMatiere) ?? subjects[0] ?? null,
-    [subjects, selectedMatiere]
+  const subjects = useMemo(
+    () => buildSubjectSummaries(rows, progress, registeredSubjects),
+    [rows, progress, registeredSubjects]
   );
 
-  const missedForCurrentSubject = useMemo(() => {
-    if (!currentSubject) return [];
-    return getMissedQuestionsForSubject(rows, currentSubject.matiere, progress);
-  }, [rows, currentSubject, progress]);
+  // If currently viewing a subject that was removed remotely, return cleanly to Hub
+  useEffect(() => {
+    if (view === 'subject' && selectedMatiere && !subjects.some((s) => s.matiere === selectedMatiere)) {
+      if (subjects.length > 0) {
+        setSelectedMatiere(subjects[0].matiere);
+      } else {
+        setView('hub');
+      }
+    }
+  }, [view, selectedMatiere, subjects]);
+
+  const currentSubject = useMemo(
+    () => subjects.find((s) => s.matiere === selectedMatiere) ?? null,
+    [subjects, selectedMatiere]
+  );
 
   const handleSavePseudo = (nextPseudo: string) => {
     const saved = saveStudentPseudo(nextPseudo);
     setPseudo(saved);
     setPseudoModalOpen(false);
   };
+
+  const handleGoHome = useCallback(() => {
+    setView('hub');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  const handleSelectSubject = useCallback((matiere: string) => {
+    setSelectedMatiere(matiere);
+    setActiveSubTab('evaluations');
+    setLeaderboardSectionFilter('all');
+    setView('subject');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  const handleChangeSubTab = useCallback((tab: SubjectSubTab) => {
+    setActiveSubTab(tab);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
 
   const startSession = useCallback(
     (matiere: string, sectionDs: string, title: string, questions: HydratedQuestion[]) => {
@@ -200,62 +239,45 @@ export default function App() {
     []
   );
 
-  const handleSelectMatiere = (matiere: string) => {
-    setSelectedMatiere(matiere);
-    setLeaderboardSectionFilter('all');
-    setView('subject');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+  const handleLaunchDsQuiz = useCallback(
+    (config: DsLaunchConfig) => {
+      if (!currentSubject) return;
+      const picked = selectDsQuizQuestions(rows, progress, {
+        matiere: currentSubject.matiere,
+        section_ds: config.sectionDs,
+        mode: config.mode,
+        themes: config.themes,
+        difficulties: config.difficulties,
+        count: config.count,
+      });
 
-  const handleChangeSubTab = (tab: SubjectSubTab) => {
-    setActiveSubTab(tab);
-    if (view !== 'subject') setView('subject');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+      if (picked.length === 0) return;
 
-  const handleLaunchSectionExam = (sectionDs: string, examSize: ExamSize) => {
-    if (!currentSubject) return;
-    const picked = selectQuizQuestions(rows, {
-      matiere: currentSubject.matiere,
-      section_ds: sectionDs,
-      mode: 'exam',
-      examSize,
-    });
-    startSession(
-      currentSubject.matiere,
-      sectionDs,
-      `${sectionDs} · Examen (${picked.length}q)`,
-      picked
-    );
-  };
+      let title: string;
+      if (config.mode === 'exam') {
+        title = `${config.sectionDs} · Mode Examen (${picked.length}q)`;
+      } else if (config.mode === 'errors') {
+        title = `${config.sectionDs} · Mes Erreurs (${picked.length}q)`;
+      } else {
+        const parts: string[] = [config.sectionDs];
+        if (config.themes.length > 0) {
+          parts.push(
+            `${config.themes.slice(0, 2).join(' + ')}${config.themes.length > 2 ? ` (+${config.themes.length - 2})` : ''}`
+          );
+        }
+        if (config.difficulties.length > 0) {
+          parts.push(config.difficulties.map(getDifficultyStars).join(' / '));
+        }
+        if (parts.length === 1) {
+          parts.push(`Standard (${picked.length}q)`);
+        }
+        title = parts.join(' · ');
+      }
 
-  const handleLaunchThemesQuiz = (
-    sectionDs: string,
-    selectedThemes: string[],
-    selectedDifficulties: DifficultyLevel[]
-  ) => {
-    if (!currentSubject) return;
-    const picked = selectQuizQuestions(rows, {
-      matiere: currentSubject.matiere,
-      section_ds: sectionDs,
-      themes: selectedThemes,
-      difficulties: selectedDifficulties,
-      mode: 'themes',
-    });
-    const parts: string[] = [sectionDs];
-    if (selectedThemes.length > 0) {
-      parts.push(
-        `${selectedThemes.slice(0, 2).join(' + ')}${selectedThemes.length > 2 ? ` (+${selectedThemes.length - 2})` : ''}`
-      );
-    }
-    if (selectedDifficulties.length > 0) {
-      parts.push(selectedDifficulties.map(getDifficultyStars).join(' / '));
-    }
-    if (parts.length === 1) {
-      parts.push('Entraînement complet');
-    }
-    startSession(currentSubject.matiere, sectionDs, parts.join(' · '), picked);
-  };
+      startSession(currentSubject.matiere, config.sectionDs, title, picked);
+    },
+    [currentSubject, rows, progress, startSession]
+  );
 
   const handleRecordAnswer = useCallback((questionId: string, isCorrect: boolean) => {
     setProgress((prev) => {
@@ -330,126 +352,56 @@ export default function App() {
   }, [session, view]);
 
   return (
-    <div className="min-h-dvh flex flex-col bg-[var(--bg)] text-[var(--text)]">
+    <div className="min-h-[100dvh] flex flex-col bg-[var(--bg)] text-[var(--text)]">
       <OfflineIndicator />
       <Header
         theme={theme}
         pseudo={pseudo}
         onThemeChange={setTheme}
-        onGoHome={() => {
-          setActiveSubTab('revisions');
-          setView('subject');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
+        onGoHome={handleGoHome}
         onEditPseudo={() => setPseudoModalOpen(true)}
         onOpenAdmin={() => setAdminOpen(true)}
       />
 
-      {/* Top Matières Tab Navigation (always available outside active quiz) */}
-      {view !== 'quiz' && subjects.length > 0 && (
-        <SubjectTabsBar
-          subjects={subjects}
-          activeMatiere={currentSubject?.matiere ?? null}
-          loading={syncing}
-          onSelectMatiere={handleSelectMatiere}
-          onRefresh={() => {
-            void loadQuizzes();
-            void loadAllScores();
-          }}
-        />
-      )}
-
       <main className="flex-1">
-        {loading && !currentSubject && (
-          <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {[1, 2].map((i) => (
-              <div
-                key={i}
-                className="h-56 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 animate-pulse"
-              >
-                <div className="h-5 w-24 rounded bg-[var(--surface-2)]" />
-                <div className="mt-4 h-12 w-full rounded-xl bg-[var(--surface-2)]" />
-                <div className="mt-6 flex gap-2">
-                  <div className="h-9 w-24 rounded-xl bg-[var(--surface-2)]" />
-                  <div className="h-9 w-28 rounded-xl bg-[var(--surface-2)]" />
-                </div>
-              </div>
-            ))}
-          </div>
+        {/* ==================== LEVEL 1: HOME HUB ==================== */}
+        {view === 'hub' && (
+          <HomeHub
+            bannerUrl={settings.home_banner_url}
+            subjects={subjects}
+            loading={loading}
+            syncing={syncing}
+            syncError={syncError}
+            onSelectSubject={handleSelectSubject}
+            onRefresh={() => {
+              void loadCatalog();
+              void loadAllScores();
+            }}
+            onOpenAdmin={() => setAdminOpen(true)}
+          />
         )}
 
-        {/* Empty / Offline State when Supabase currently has 0 quizzes */}
-        {!loading && view === 'subject' && !currentSubject && (
-          <section className="mx-auto max-w-lg px-4 py-12 sm:py-16">
-            <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 sm:p-8 text-center">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                {syncError ? <WifiOff className="h-6 w-6" /> : <Database className="h-6 w-6" />}
-              </div>
-
-              <h1 className="mt-4 text-[19px] font-bold text-[var(--text)]">
-                {syncError
-                  ? 'Connexion Supabase indisponible'
-                  : 'Aucun quiz publié sur Supabase'}
-              </h1>
-
-              <p className="mt-2 text-[14.5px] leading-relaxed text-[var(--dim)]">
-                {syncError
-                  ? 'Impossible de récupérer les quiz pour le moment. Vérifiez votre connexion réseau puis réessayez.'
-                  : 'Dès qu’un quiz est publié dans Supabase, tous les étudiants le reçoivent automatiquement ici.'}
-              </p>
-
-              <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2.5">
-                {!syncError && (
-                  <button
-                    type="button"
-                    onClick={() => setAdminOpen(true)}
-                    className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-5 py-2.5 text-[14px] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]"
-                  >
-                    <Lock className="h-4 w-4 shrink-0" />
-                    <span>Publier un quiz (Admin)</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  disabled={syncing}
-                  onClick={() => {
-                    void loadQuizzes();
-                    void loadAllScores();
-                  }}
-                  className={`inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-[14px] font-semibold transition-colors disabled:opacity-50 ${
-                    syncError
-                      ? 'bg-[var(--accent)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]'
-                      : 'border border-[var(--line)] bg-[var(--surface-2)] text-[var(--text)] hover:border-[var(--accent)]'
-                  }`}
-                >
-                  <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? 'animate-spin' : ''}`} />
-                  <span>{syncError ? 'Réessayer' : 'Actualiser'}</span>
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
-
+        {/* ==================== LEVEL 2 & 3: SUBJECT WORKSPACE + DS ACCORDION ==================== */}
         {view === 'subject' && currentSubject && (
           <SubjectWorkspace
             subject={currentSubject}
             allRows={rows}
+            progress={progress}
             activeSubTab={activeSubTab}
-            missedQuestions={missedForCurrentSubject}
             scores={scores}
             scoresLoading={scoresLoading}
             currentPseudo={pseudo}
             leaderboardSectionFilter={leaderboardSectionFilter}
+            onBackHome={handleGoHome}
             onChangeSubTab={handleChangeSubTab}
             onChangeLeaderboardSection={setLeaderboardSectionFilter}
             onRefreshScores={() => void loadAllScores()}
-            onLaunchSectionExam={handleLaunchSectionExam}
-            onLaunchThemesQuiz={handleLaunchThemesQuiz}
-            onReplayMissed={() => handleReplayMissed(missedForCurrentSubject)}
+            onLaunchDsQuiz={handleLaunchDsQuiz}
+            onOpenAdmin={() => setAdminOpen(true)}
           />
         )}
 
+        {/* ==================== ACTIVE QUIZ SESSION ==================== */}
         {view === 'quiz' && session && (
           <QuizSession
             key={session.key}
@@ -461,6 +413,7 @@ export default function App() {
           />
         )}
 
+        {/* ==================== QUIZ RESULTS ==================== */}
         {view === 'results' && session && quizSummary && (
           <QuizResults
             title={session.title}
@@ -481,18 +434,13 @@ export default function App() {
             }}
             onBackToSubject={() => {
               setSelectedMatiere(session.matiere);
-              setActiveSubTab('revisions');
+              setActiveSubTab('evaluations');
               setView('subject');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
           />
         )}
       </main>
-
-      {/* Thumb-Zone Mobile Bottom Tab Bar (Révisions | Classement) */}
-      {view !== 'quiz' && subjects.length > 0 && (
-        <MobileBottomNav activeSubTab={activeSubTab} onChangeSubTab={handleChangeSubTab} />
-      )}
 
       <PseudoModal
         open={pseudoModalOpen}
@@ -504,12 +452,16 @@ export default function App() {
 
       <AdminImportModal
         open={adminOpen}
-        existingSubjects={subjects.map((s) => s.matiere)}
+        subjects={registeredSubjects}
+        bannerUrl={settings.home_banner_url}
         allQuizzes={rows}
         onClose={() => setAdminOpen(false)}
         onImported={async () => {
-          await loadQuizzes();
+          await loadCatalog();
           await loadAllScores({ silent: true });
+        }}
+        onAppearanceChanged={async () => {
+          await loadCatalog();
         }}
       />
     </div>

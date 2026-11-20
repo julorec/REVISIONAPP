@@ -1,6 +1,17 @@
 import { createClient } from '@supabase/supabase-js';
-import type { ProgressMap, QuizQuestion, QuizRow, ScoreEntry } from '../types/quiz';
-import { mergeQuestionsIntoBatch, normalizeSectionDs } from '../utils/quizEngine';
+import type {
+  AppSettings,
+  ProgressMap,
+  QuizQuestion,
+  QuizRow,
+  ScoreEntry,
+  SubjectRecord,
+} from '../types/quiz';
+import {
+  mergeQuestionsIntoBatch,
+  normalizeSectionDs,
+  slugifySubjectName,
+} from '../utils/quizEngine';
 import { normalizeQuestionList } from '../utils/quizNormalizer';
 import {
   mergeRemoteAndPendingScores,
@@ -14,6 +25,8 @@ export const SUPABASE_ANON_KEY =
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
   'sb_publishable_eZqDwNSeE4HuQTOFR1Twxw_4fabN-Vq';
 
+export const MEDIA_BUCKET = 'app-media';
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: false,
@@ -21,7 +34,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
 });
 
-// Client storage keys (scores offline outbox, personal progress & pseudo only — quizzes are 100% live from Supabase)
+// Client storage keys (scores offline outbox, personal progress & pseudo only — quizzes, subjects & settings are 100% live from Supabase)
 const STORAGE_SCORES_CACHE_KEY = 'coach_partiels_scores_cache_v2';
 const STORAGE_PENDING_SCORES_KEY = 'coach_partiels_pending_scores_v1';
 const STORAGE_PROGRESS_KEY = 'coach_partiels_progress_v1';
@@ -46,6 +59,253 @@ export function saveStudentPseudo(pseudo: string): string {
     // Ignore storage issues
   }
   return cleaned;
+}
+
+// ============================================================================
+// SUBJECTS — 100% LIVE FROM SUPABASE (public.subjects)
+// ============================================================================
+export interface FetchSubjectsResult {
+  subjects: SubjectRecord[];
+  error?: string;
+}
+
+export async function fetchSubjects(): Promise<FetchSubjectsResult> {
+  try {
+    const { data, error } = await supabase
+      .from('subjects')
+      .select('id, name, slug, cover_image_url, display_order, created_at')
+      .order('display_order', { ascending: true })
+      .order('name', { ascending: true });
+
+    if (error) {
+      return {
+        subjects: [],
+        error: `${error.code ?? 'SUPABASE'} : ${error.message}`,
+      };
+    }
+
+    const subjects: SubjectRecord[] = ((data ?? []) as Array<Record<string, unknown>>)
+      .filter((r) => typeof r.name === 'string' && r.name.trim().length > 0)
+      .map((r) => ({
+        id: String(r.id),
+        name: String(r.name).trim(),
+        slug: typeof r.slug === 'string' && r.slug.trim() ? r.slug.trim() : slugifySubjectName(String(r.name)),
+        cover_image_url:
+          typeof r.cover_image_url === 'string' && r.cover_image_url.trim().length > 0
+            ? r.cover_image_url.trim()
+            : null,
+        display_order: typeof r.display_order === 'number' ? r.display_order : 0,
+        created_at: typeof r.created_at === 'string' ? r.created_at : undefined,
+      }));
+
+    return { subjects };
+  } catch (err) {
+    return {
+      subjects: [],
+      error: err instanceof Error ? err.message : 'Erreur réseau Supabase',
+    };
+  }
+}
+
+export async function createSubjectInSupabase(payload: {
+  name: string;
+  cover_image_url?: string | null;
+  display_order?: number;
+}): Promise<{ ok: boolean; subject?: SubjectRecord; error?: string }> {
+  const name = payload.name.trim();
+  if (!name) return { ok: false, error: 'Le nom de la matière est requis.' };
+
+  const slug = slugifySubjectName(name);
+  const coverUrl =
+    payload.cover_image_url && payload.cover_image_url.trim().length > 0
+      ? payload.cover_image_url.trim()
+      : null;
+
+  try {
+    const { data, error } = await supabase
+      .from('subjects')
+      .insert({
+        name,
+        slug,
+        cover_image_url: coverUrl,
+        display_order: payload.display_order ?? 10,
+      })
+      .select('id, name, slug, cover_image_url, display_order, created_at')
+      .single();
+
+    if (error) {
+      return { ok: false, error: `${error.code ?? 'Erreur Supabase'} : ${error.message}` };
+    }
+
+    return { ok: true, subject: data as SubjectRecord };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Impossible de créer la matière.',
+    };
+  }
+}
+
+export async function updateSubjectInSupabase(
+  id: string,
+  payload: {
+    name?: string;
+    cover_image_url?: string | null;
+    display_order?: number;
+  }
+): Promise<{ ok: boolean; subject?: SubjectRecord; error?: string }> {
+  const patch: Record<string, unknown> = {};
+  if (payload.name !== undefined) {
+    const clean = payload.name.trim();
+    if (!clean) return { ok: false, error: 'Le nom de la matière ne peut pas être vide.' };
+    patch.name = clean;
+    patch.slug = slugifySubjectName(clean);
+  }
+  if (payload.cover_image_url !== undefined) {
+    patch.cover_image_url =
+      payload.cover_image_url && payload.cover_image_url.trim().length > 0
+        ? payload.cover_image_url.trim()
+        : null;
+  }
+  if (payload.display_order !== undefined) {
+    patch.display_order = payload.display_order;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('subjects')
+      .update(patch)
+      .eq('id', id)
+      .select('id, name, slug, cover_image_url, display_order, created_at')
+      .single();
+
+    if (error) {
+      return { ok: false, error: `${error.code ?? 'Erreur Supabase'} : ${error.message}` };
+    }
+
+    return { ok: true, subject: data as SubjectRecord };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Impossible de mettre à jour la matière.',
+    };
+  }
+}
+
+export async function deleteSubjectInSupabase(
+  id: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.from('subjects').delete().eq('id', id);
+    if (error) {
+      return { ok: false, error: `${error.code ?? 'Erreur Supabase'} : ${error.message}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Impossible de supprimer la matière.',
+    };
+  }
+}
+
+// ============================================================================
+// APP SETTINGS — 100% LIVE FROM SUPABASE (public.app_settings)
+// ============================================================================
+export async function fetchAppSettings(): Promise<{ settings: AppSettings; error?: string }> {
+  try {
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('key, value');
+
+    if (error) {
+      return {
+        settings: { home_banner_url: null },
+        error: `${error.code ?? 'SUPABASE'} : ${error.message}`,
+      };
+    }
+
+    let homeBannerUrl: string | null = null;
+    for (const row of (data ?? []) as Array<{ key?: string; value?: string | null }>) {
+      if (row.key === 'home_banner_url' && typeof row.value === 'string' && row.value.trim()) {
+        homeBannerUrl = row.value.trim();
+      }
+    }
+
+    return { settings: { home_banner_url: homeBannerUrl } };
+  } catch (err) {
+    return {
+      settings: { home_banner_url: null },
+      error: err instanceof Error ? err.message : 'Erreur réseau Supabase',
+    };
+  }
+}
+
+export async function upsertAppSettingInSupabase(
+  key: string,
+  value: string | null
+): Promise<{ ok: boolean; error?: string }> {
+  const cleanValue = value && value.trim().length > 0 ? value.trim() : null;
+  try {
+    const { error } = await supabase
+      .from('app_settings')
+      .upsert({ key, value: cleanValue }, { onConflict: 'key' });
+
+    if (error) {
+      return { ok: false, error: `${error.code ?? 'Erreur Supabase'} : ${error.message}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Impossible de sauvegarder le paramètre.',
+    };
+  }
+}
+
+// ============================================================================
+// SUPABASE STORAGE ('app-media') — DIRECT IMAGE UPLOAD FROM ADMIN
+// ============================================================================
+export async function uploadMediaToSupabase(
+  file: File,
+  folder: 'banner' | 'subjects'
+): Promise<{ ok: boolean; publicUrl?: string; error?: string }> {
+  if (!file.type.startsWith('image/')) {
+    return { ok: false, error: 'Veuillez sélectionner un fichier image (PNG, JPG, WebP, etc.).' };
+  }
+  const maxBytes = 8 * 1024 * 1024; // 8 MB
+  if (file.size > maxBytes) {
+    return { ok: false, error: "L'image dépasse la limite de 8 Mo." };
+  }
+
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+  const base = slugifySubjectName(file.name.replace(/\.[^.]+$/, '')).slice(0, 32);
+  const path = `${folder}/${Date.now()}-${base}.${ext}`;
+
+  try {
+    const { error: uploadError } = await supabase.storage
+      .from(MEDIA_BUCKET)
+      .upload(path, file, {
+        cacheControl: '3600',
+        upsert: false,
+        contentType: file.type,
+      });
+
+    if (uploadError) {
+      return {
+        ok: false,
+        error: `Upload Storage impossible : ${uploadError.message}`,
+      };
+    }
+
+    const { data } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(path);
+    return { ok: true, publicUrl: data.publicUrl };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Échec de l'envoi vers Supabase Storage.",
+    };
+  }
 }
 
 // ============================================================================
@@ -518,28 +778,28 @@ export async function recordQuizScore(payload: {
 }
 
 // ============================================================================
-// REALTIME SUBSCRIPTION (AUTO-SYNC NEW QUIZZES & SCORES FOR ALL USERS)
+// REALTIME SUBSCRIPTION (AUTO-SYNC QUIZZES, SCORES, SUBJECTS & SETTINGS)
 // ============================================================================
 export function subscribeToSupabaseChanges(handlers: {
   onQuizzesChanged: () => void;
   onScoresChanged: () => void;
+  onSubjectsChanged?: () => void;
+  onSettingsChanged?: () => void;
 }): () => void {
   const channel = supabase
     .channel('coach-partiels-live-sync')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'quizzes' },
-      () => {
-        handlers.onQuizzesChanged();
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'scores' },
-      () => {
-        handlers.onScoresChanged();
-      }
-    )
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'quizzes' }, () => {
+      handlers.onQuizzesChanged();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'scores' }, () => {
+      handlers.onScoresChanged();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'subjects' }, () => {
+      handlers.onSubjectsChanged?.();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, () => {
+      handlers.onSettingsChanged?.();
+    })
     .subscribe();
 
   return () => {

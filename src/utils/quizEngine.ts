@@ -3,13 +3,16 @@ import type {
   ExamSize,
   HydratedQuestion,
   ProgressMap,
+  QuizCountOption,
   QuizMode,
   QuizQuestion,
   QuizResultSummary,
   QuizRow,
   SectionSummary,
+  SubjectRecord,
   SubjectSummary,
   ThemeSummary,
+  TrainingMode,
   UserAnswer,
 } from '../types/quiz';
 import { computeQuizPoints } from './leaderboard';
@@ -18,6 +21,15 @@ import { DEFAULT_DIFFICULTY, normalizeDifficulty, normalizeThemes } from './quiz
 export const EXAM_QUESTION_LIMIT: ExamSize = 20;
 export const DEFAULT_NUMERIC_TOLERANCE = 0.05; // ±5%
 export const DEFAULT_SECTION_DS = 'DS 1';
+
+export function slugifySubjectName(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'matiere';
+}
 
 export function normalizeDifficultySafe(raw: unknown): DifficultyLevel {
   const res = normalizeDifficulty(raw);
@@ -256,6 +268,106 @@ export function countMatchingThemeQuestions(
   return countMatchingFilteredQuestions(rows, matiere, sectionDs, selectedThemes, []);
 }
 
+export interface DsConfigOptions {
+  matiere: string;
+  section_ds: string;
+  mode: TrainingMode;
+  themes: string[];
+  difficulties: DifficultyLevel[];
+  count: QuizCountOption;
+}
+
+/**
+ * Computes the matching question pool and effective quiz size for the Level 3 DS Accordion.
+ */
+export function selectDsQuizQuestions(
+  rows: QuizRow[],
+  progress: ProgressMap,
+  options: DsConfigOptions,
+  rng: () => number = Math.random
+): HydratedQuestion[] {
+  const sectionPool = hydrateQuestions(
+    rows.filter(
+      (r) =>
+        r.matiere === options.matiere &&
+        normalizeSectionDs(r.section_ds) === normalizeSectionDs(options.section_ds)
+    )
+  );
+
+  if (options.mode === 'exam') {
+    return shuffleArray(sectionPool, rng).slice(0, Math.min(EXAM_QUESTION_LIMIT, sectionPool.length));
+  }
+
+  let filtered: HydratedQuestion[];
+  if (options.mode === 'errors') {
+    filtered = sectionPool.filter((q) => {
+      const stat = progress[q.id];
+      return stat && stat.tries > 0 && !stat.lastOk;
+    });
+  } else {
+    const byThemes = filterQuestionsByThemes(sectionPool, options.themes);
+    filtered = filterQuestionsByDifficulties(byThemes, options.difficulties);
+  }
+
+  const shuffled = shuffleArray(filtered, rng);
+  if (options.count === 'max') return shuffled;
+  return shuffled.slice(0, Math.min(options.count, shuffled.length));
+}
+
+export function computeDsSelectionStats(
+  rows: QuizRow[],
+  progress: ProgressMap,
+  options: DsConfigOptions
+): {
+  totalInSection: number;
+  missedInSection: number;
+  availableForMode: number;
+  effectiveCount: number;
+} {
+  const sectionPool = hydrateQuestions(
+    rows.filter(
+      (r) =>
+        r.matiere === options.matiere &&
+        normalizeSectionDs(r.section_ds) === normalizeSectionDs(options.section_ds)
+    )
+  );
+
+  const missedPool = sectionPool.filter((q) => {
+    const stat = progress[q.id];
+    return stat && stat.tries > 0 && !stat.lastOk;
+  });
+
+  if (options.mode === 'exam') {
+    const effective = Math.min(EXAM_QUESTION_LIMIT, sectionPool.length);
+    return {
+      totalInSection: sectionPool.length,
+      missedInSection: missedPool.length,
+      availableForMode: sectionPool.length,
+      effectiveCount: effective,
+    };
+  }
+
+  const availablePool =
+    options.mode === 'errors'
+      ? missedPool
+      : filterQuestionsByDifficulties(
+          filterQuestionsByThemes(sectionPool, options.themes),
+          options.difficulties
+        );
+
+  const effective =
+    options.count === 'max'
+      ? availablePool.length
+      : Math.min(options.count, availablePool.length);
+
+  return {
+    totalInSection: sectionPool.length,
+    missedInSection: missedPool.length,
+    availableForMode: availablePool.length,
+    effectiveCount: effective,
+  };
+}
+
 /**
  * Appends incoming questions into an existing DS question array without overwriting
  * existing entries, ensuring unique IDs across the merged array.
@@ -287,22 +399,57 @@ export function mergeQuestionsIntoBatch(
   return merged;
 }
 
+/**
+ * Combines registered subjects (from public.subjects, even if they have 0 quizzes yet)
+ * with live quiz rows from public.quizzes, preserving display_order.
+ */
 export function buildSubjectSummaries(
   rows: QuizRow[],
-  progress: ProgressMap
+  progress: ProgressMap,
+  registeredSubjects: SubjectRecord[] = []
 ): SubjectSummary[] {
   const bySubject = new Map<string, HydratedQuestion[]>();
   const all = hydrateQuestions(rows);
 
-  for (const q of all) {
-    const list = bySubject.get(q.matiere) ?? [];
-    list.push(q);
-    bySubject.set(q.matiere, list);
+  // Map lowercase subject name -> canonical SubjectRecord
+  const registeredByKey = new Map<string, SubjectRecord>();
+  for (const sub of registeredSubjects) {
+    registeredByKey.set(sub.name.trim().toLowerCase(), sub);
   }
 
-  const summaries: SubjectSummary[] = [];
+  for (const q of all) {
+    const key = q.matiere.trim().toLowerCase();
+    const canonicalName = registeredByKey.get(key)?.name ?? q.matiere.trim();
+    const list = bySubject.get(canonicalName) ?? [];
+    list.push({ ...q, matiere: canonicalName });
+    bySubject.set(canonicalName, list);
+  }
 
-  for (const [matiere, questions] of bySubject.entries()) {
+  // Ensure every registered subject appears even if it currently has 0 quizzes
+  const orderedNames: string[] = [];
+  const seenNames = new Set<string>();
+
+  const sortedRegistered = registeredSubjects
+    .slice()
+    .sort((a, b) => a.display_order - b.display_order || a.name.localeCompare(b.name, 'fr'));
+
+  for (const sub of sortedRegistered) {
+    if (!seenNames.has(sub.name)) {
+      seenNames.add(sub.name);
+      orderedNames.push(sub.name);
+    }
+  }
+
+  for (const name of bySubject.keys()) {
+    if (!seenNames.has(name)) {
+      seenNames.add(name);
+      orderedNames.push(name);
+    }
+  }
+
+  const summaries: SubjectSummary[] = orderedNames.map((matiere, idx) => {
+    const reg = registeredByKey.get(matiere.toLowerCase());
+    const questions = bySubject.get(matiere) ?? [];
     const sectionQuestionsMap = new Map<string, HydratedQuestion[]>();
 
     let seenCount = 0;
@@ -333,18 +480,25 @@ export function buildSubjectSummaries(
         let secTries = 0;
         let secRight = 0;
         let secMissed = 0;
+        let secMastered = 0;
         const difficultyCounts: Record<DifficultyLevel, number> = { 1: 0, 2: 0, 3: 0 };
 
         for (const q of secQuestions) {
           difficultyCounts[q.difficulte] += 1;
           const stat = progress[q.id];
-          if (stat && stat.tries > 0) secSeen += 1;
+          if (stat && stat.tries > 0) {
+            secSeen += 1;
+            if (stat.lastOk) secMastered += 1;
+            else secMissed += 1;
+          }
           if (stat) {
             secTries += stat.tries;
             secRight += stat.right;
-            if (stat.tries > 0 && !stat.lastOk) secMissed += 1;
           }
         }
+
+        const masteryRate =
+          secQuestions.length > 0 ? Math.round((secMastered / secQuestions.length) * 100) : null;
 
         return {
           section_ds,
@@ -353,14 +507,19 @@ export function buildSubjectSummaries(
           rightCount: secRight,
           triesCount: secTries,
           missedCount: secMissed,
+          masteryRate,
           themes: extractSectionThemes(secQuestions, progress),
           difficultyCounts,
         };
       })
       .sort((a, b) => a.section_ds.localeCompare(b.section_ds, 'fr', { numeric: true }));
 
-    summaries.push({
+    return {
+      id: reg?.id,
+      slug: reg?.slug ?? slugifySubjectName(matiere),
       matiere,
+      cover_image_url: reg?.cover_image_url ?? null,
+      display_order: reg?.display_order ?? 100 + idx,
       totalQuestions: questions.length,
       sections,
       seenCount,
@@ -368,9 +527,15 @@ export function buildSubjectSummaries(
       rightCount,
       missedCount,
       successRate: triesCount > 0 ? Math.round((rightCount / triesCount) * 100) : null,
-    });
-  }
+    };
+  });
 
+  // When registered subjects are provided, honor display_order; otherwise keep question count desc
+  if (registeredSubjects.length > 0) {
+    return summaries.sort(
+      (a, b) => a.display_order - b.display_order || a.matiere.localeCompare(b.matiere, 'fr')
+    );
+  }
   return summaries.sort(
     (a, b) => b.totalQuestions - a.totalQuestions || a.matiere.localeCompare(b.matiere, 'fr')
   );
@@ -402,7 +567,7 @@ export function selectQuizQuestions(
     return shuffleArray(pool, rng).slice(0, Math.min(limit, pool.length));
   }
 
-  // Mode Entraînement: combinable filters on Grands Thèmes + Difficulté
+  // Mode Entraînement / Standard: combinable filters on Grands Thèmes + Difficulté
   if (criteria.themes && criteria.themes.length > 0) {
     pool = filterQuestionsByThemes(pool, criteria.themes);
   }

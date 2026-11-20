@@ -66,6 +66,7 @@ export function QuizSession({
   const [orderClickMode, setOrderClickMode] = useState(false);
   const [sequentialPicked, setSequentialPicked] = useState<string[]>([]);
   const [numericError, setNumericError] = useState<string | null>(null);
+  const [isNumericFocused, setIsNumericFocused] = useState(false);
 
   // Precompute deterministic non-solved shuffled pools for every 'ordre' question in this session
   const initialOrderPools = useMemo(() => {
@@ -263,9 +264,16 @@ export function QuizSession({
 
   const expectedOrder = current.ordre_correct ?? [];
   const displayedOrder = isLocked && submitted?.kind === 'order' ? submitted.sequence : draftOrder;
+  const isCalculNumeric = current.type === 'calcul' && !isChoiceQuestion(current);
+  // Avoid fixed bottom-0 bar during keyboard input (especially calcul numeric entry)
+  const useInlineMobileControls = isCalculNumeric || isNumericFocused;
 
   return (
-    <section className="mx-auto max-w-3xl px-4 py-5 sm:px-6 sm:py-7 pb-24 sm:pb-10">
+    <section
+      className={`mx-auto max-w-3xl px-4 py-5 sm:px-6 sm:py-7 overflow-y-auto overscroll-contain ${
+        useInlineMobileControls ? 'pb-12 sm:pb-10' : 'pb-24 sm:pb-10'
+      }`}
+    >
       {/* Top Quiz Progress Bar */}
       <div className="mb-4">
         <div className="flex items-center justify-between gap-2 text-[12.5px] font-mono-code text-[var(--dim)] mb-2">
@@ -433,6 +441,14 @@ export function QuizSession({
                 autoComplete="off"
                 disabled={isLocked}
                 value={draftNumeric}
+                onFocus={(e) => {
+                  setIsNumericFocused(true);
+                  const el = e.currentTarget;
+                  setTimeout(() => {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }, 120);
+                }}
+                onBlur={() => setIsNumericFocused(false)}
                 onChange={(e) => {
                   setDraftNumeric(e.target.value);
                   if (numericError) setNumericError(null);
@@ -677,19 +693,23 @@ export function QuizSession({
           </div>
         )}
 
-        {/* Desktop Footer Controls */}
-        <div className="mt-6 hidden sm:flex items-center justify-between gap-3 pt-4 border-t border-[var(--line)]">
+        {/* Footer Controls (always visible on desktop, and inline on mobile during calcul/keyboard input) */}
+        <div
+          className={`mt-6 ${
+            useInlineMobileControls ? 'flex' : 'hidden sm:flex'
+          } items-center justify-between gap-3 pt-4 border-t border-[var(--line)]`}
+        >
           <button
             type="button"
             disabled={index === 0}
             onClick={handlePrev}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-[var(--line)] px-4 py-2 text-[14px] font-medium text-[var(--text)] hover:border-[var(--accent)] disabled:opacity-40"
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-[var(--line)] px-3.5 sm:px-4 py-2 text-[14px] font-medium text-[var(--text)] hover:border-[var(--accent)] disabled:opacity-40"
           >
             <ArrowLeft className="h-4 w-4" />
             <span>Précédente</span>
           </button>
 
-          <div className="text-[12px] font-mono-code text-[var(--dim)]">
+          <div className="hidden sm:block text-[12px] font-mono-code text-[var(--dim)]">
             {answeredCount}/{questions.length} validée{answeredCount > 1 ? 's' : ''}
           </div>
 
@@ -698,7 +718,7 @@ export function QuizSession({
               type="button"
               disabled={!canSubmit}
               onClick={handleValidate}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2 text-[14.5px] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-45"
+              className="inline-flex min-h-[44px] flex-1 sm:flex-none items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2 text-[14.5px] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-45"
             >
               <span>Valider</span>
               <Check className="h-4 w-4" />
@@ -707,7 +727,7 @@ export function QuizSession({
             <button
               type="button"
               onClick={handleNext}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2 text-[14.5px] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]"
+              className="inline-flex min-h-[44px] flex-1 sm:flex-none items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2 text-[14.5px] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]"
             >
               <span>
                 {index + 1 < questions.length ? 'Question suivante' : 'Voir mes résultats'}
@@ -718,40 +738,42 @@ export function QuizSession({
         </div>
       </article>
 
-      {/* Mobile Sticky Bottom Thumb-Zone Action Bar */}
-      <div className="fixed inset-x-0 bottom-0 z-20 flex sm:hidden items-center justify-between gap-2.5 border-t border-[var(--line)] bg-[var(--surface)]/95 backdrop-blur-sm px-4 pt-2.5 pb-safe">
-        <button
-          type="button"
-          disabled={index === 0}
-          onClick={handlePrev}
-          className="inline-flex min-h-[46px] items-center justify-center gap-1 rounded-lg border border-[var(--line)] px-3.5 text-[14px] font-medium text-[var(--text)] disabled:opacity-40"
-          aria-label="Question précédente"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          <span>Préc.</span>
-        </button>
+      {/* Mobile Sticky Bottom Bar (strictly omitted during calcul / virtual keyboard input) */}
+      {!useInlineMobileControls && (
+        <div className="fixed inset-x-0 bottom-0 z-20 flex sm:hidden items-center justify-between gap-2.5 border-t border-[var(--line)] bg-[var(--surface)]/95 backdrop-blur-sm px-4 pt-2.5 pb-safe">
+          <button
+            type="button"
+            disabled={index === 0}
+            onClick={handlePrev}
+            className="inline-flex min-h-[46px] items-center justify-center gap-1 rounded-lg border border-[var(--line)] px-3.5 text-[14px] font-medium text-[var(--text)] disabled:opacity-40"
+            aria-label="Question précédente"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span>Préc.</span>
+          </button>
 
-        {!isLocked ? (
-          <button
-            type="button"
-            disabled={!canSubmit}
-            onClick={handleValidate}
-            className="inline-flex min-h-[46px] flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[15px] font-semibold text-[var(--accent-ink)] disabled:opacity-45"
-          >
-            <span>Valider</span>
-            <Check className="h-4 w-4" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleNext}
-            className="inline-flex min-h-[46px] flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[15px] font-semibold text-[var(--accent-ink)]"
-          >
-            <span>{index + 1 < questions.length ? 'Suivante' : 'Résultats'}</span>
-            <ArrowRight className="h-4 w-4" />
-          </button>
-        )}
-      </div>
+          {!isLocked ? (
+            <button
+              type="button"
+              disabled={!canSubmit}
+              onClick={handleValidate}
+              className="inline-flex min-h-[46px] flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[15px] font-semibold text-[var(--accent-ink)] disabled:opacity-45"
+            >
+              <span>Valider</span>
+              <Check className="h-4 w-4" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleNext}
+              className="inline-flex min-h-[46px] flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[15px] font-semibold text-[var(--accent-ink)]"
+            >
+              <span>{index + 1 < questions.length ? 'Suivante' : 'Résultats'}</span>
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
 }
