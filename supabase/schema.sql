@@ -2,6 +2,7 @@
 -- Coach Partiels — INSA Rennes ESET 3A
 -- Source de vérité unique et 100 % idempotente du schéma Supabase
 -- Exécutable à volonté via : psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f supabase/schema.sql
+-- ou via GitHub Actions (.github/workflows/supabase-sync.yml)
 -- ============================================================================
 
 create extension if not exists pgcrypto;
@@ -168,6 +169,36 @@ create policy "Insertion publique des scores"
   with check (true);
 
 -- ----------------------------------------------------------------------------
--- 5. Rafraîchissement immédiat du cache de schéma PostgREST
+-- 5. Synchronisation temps réel (Supabase Realtime) idempotente
+--    Permet à tous les étudiants connectés de recevoir automatiquement
+--    les nouveaux quiz et scores dès leur publication.
+-- ----------------------------------------------------------------------------
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'quizzes'
+    ) then
+      alter publication supabase_realtime add table public.quizzes;
+    end if;
+
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'scores'
+    ) then
+      alter publication supabase_realtime add table public.scores;
+    end if;
+  end if;
+end $$;
+
+-- ----------------------------------------------------------------------------
+-- 6. Rafraîchissement immédiat du cache de schéma PostgREST
 -- ----------------------------------------------------------------------------
 notify pgrst, 'reload schema';

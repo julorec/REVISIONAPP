@@ -1,9 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 import { SEED_QUIZZES } from '../data/seedQuizzes';
-import { SEED_SCORES } from '../data/seedScores';
 import type { ProgressMap, QuizQuestion, QuizRow, ScoreEntry } from '../types/quiz';
 import { mergeQuestionsIntoBatch, normalizeSectionDs } from '../utils/quizEngine';
 import { normalizeQuestionList } from '../utils/quizNormalizer';
+import {
+  mergeRemoteAndPendingScores,
+  removeSyncedPendingScores,
+  type PendingScorePayload,
+} from '../utils/syncState';
 
 export const SUPABASE_URL =
   import.meta.env.VITE_SUPABASE_URL || 'https://qnjiqjuqdhxemkcffgjp.supabase.co';
@@ -18,58 +22,15 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
 });
 
-const STORAGE_CACHE_KEY = 'coach_partiels_supabase_cache_v3';
-const STORAGE_LOCAL_QUIZZES_KEY = 'coach_partiels_local_quizzes_v3';
+// Read-only offline caches (strictly overwritten by every fresh Supabase response)
+const STORAGE_QUIZZES_CACHE_KEY = 'coach_partiels_supabase_cache_v4';
+const STORAGE_SCORES_CACHE_KEY = 'coach_partiels_scores_cache_v2';
+const STORAGE_PENDING_SCORES_KEY = 'coach_partiels_pending_scores_v1';
 const STORAGE_PROGRESS_KEY = 'coach_partiels_progress_v1';
 const STORAGE_PSEUDO_KEY = 'coach_partiels_student_pseudo_v1';
-const STORAGE_SCORES_CACHE_KEY = 'coach_partiels_scores_cache_v1';
-const STORAGE_LOCAL_SCORES_KEY = 'coach_partiels_local_scores_v1';
-
-export const CREATE_QUIZZES_TABLE_SQL = `-- Source de vérité unique : supabase/schema.sql (100 % idempotent)
-create extension if not exists pgcrypto;
-
-create table if not exists public.quizzes (
-  id uuid primary key default gen_random_uuid(),
-  matiere text not null,
-  section_ds text not null default 'DS 1',
-  chapitre text not null default 'Banque générale',
-  questions jsonb not null default '[]'::jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-alter table public.quizzes drop constraint if exists quizzes_type_source_check;
-alter table public.quizzes drop column if exists type_source;
-
-alter table public.quizzes enable row level security;
-drop policy if exists "Lecture publique des quizzes" on public.quizzes;
-create policy "Lecture publique des quizzes" on public.quizzes for select to anon, authenticated using (true);
-drop policy if exists "Insertion publique des quizzes" on public.quizzes;
-create policy "Insertion publique des quizzes" on public.quizzes for insert to anon, authenticated with check (true);
-drop policy if exists "Modification publique des quizzes" on public.quizzes;
-create policy "Modification publique des quizzes" on public.quizzes for update to anon, authenticated using (true) with check (true);
-
-create table if not exists public.scores (
-  id uuid primary key default gen_random_uuid(),
-  pseudo text not null,
-  matiere text not null,
-  section_ds text not null default 'DS 1',
-  points integer not null default 0,
-  bonnes_reponses integer not null default 0,
-  total_questions integer not null default 0,
-  created_at timestamptz not null default now()
-);
-
-alter table public.scores enable row level security;
-drop policy if exists "Lecture publique des scores" on public.scores;
-create policy "Lecture publique des scores" on public.scores for select to anon, authenticated using (true);
-drop policy if exists "Insertion publique des scores" on public.scores;
-create policy "Insertion publique des scores" on public.scores for insert to anon, authenticated with check (true);
-
-notify pgrst, 'reload schema';`;
 
 // ============================================================================
-// STUDENT PSEUDO PERSISTENCE
+// STUDENT PSEUDO PERSISTENCE (personal preference on device)
 // ============================================================================
 export function loadStudentPseudo(): string {
   try {
@@ -90,12 +51,12 @@ export function saveStudentPseudo(pseudo: string): string {
 }
 
 // ============================================================================
-// QUIZZES (SUPABASE + LOCAL FALLBACK + MERGE INTO EXISTING SECTION_DS)
+// QUIZZES — SUPABASE SINGLE SOURCE OF TRUTH (+ READ-ONLY OFFLINE CACHE)
 // ============================================================================
 export interface FetchQuizzesResult {
   rows: QuizRow[];
-  source: 'supabase' | 'cache' | 'seed';
-  supabaseError?: string;
+  source: 'supabase' | 'offline-cache';
+  error?: string;
 }
 
 interface RawSupabaseQuizRow {
@@ -105,6 +66,7 @@ interface RawSupabaseQuizRow {
   chapitre?: string | null;
   questions?: unknown;
   created_at?: string;
+  updated_at?: string;
 }
 
 function hydrateSupabaseRow(raw: RawSupabaseQuizRow): QuizRow | null {
@@ -129,118 +91,9 @@ function hydrateSupabaseRow(raw: RawSupabaseQuizRow): QuizRow | null {
   };
 }
 
-export function loadLocalQuizzes(): QuizRow[] {
+export function loadCachedSupabaseQuizzes(): QuizRow[] {
   try {
-    const raw = localStorage.getItem(STORAGE_LOCAL_QUIZZES_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return (parsed as QuizRow[]).map((r) => ({
-      ...r,
-      section_ds: normalizeSectionDs(r.section_ds),
-      chapitre: r.chapitre || 'Banque générale',
-    }));
-  } catch {
-    return [];
-  }
-}
-
-function writeLocalQuizzes(rows: QuizRow[]): void {
-  try {
-    localStorage.setItem(STORAGE_LOCAL_QUIZZES_KEY, JSON.stringify(rows));
-  } catch {
-    // Ignore quota errors
-  }
-}
-
-export function saveLocalQuiz(payload: {
-  id?: string;
-  matiere: string;
-  section_ds: string;
-  chapitre?: string;
-  questions: QuizQuestion[];
-}): QuizRow {
-  const existing = loadLocalQuizzes();
-  const section_ds = normalizeSectionDs(payload.section_ds);
-  const chapitre = (payload.chapitre || section_ds).trim();
-
-  if (payload.id) {
-    const idx = existing.findIndex((r) => r.id === payload.id);
-    if (idx !== -1) {
-      const updated: QuizRow = {
-        ...existing[idx],
-        matiere: payload.matiere.trim(),
-        section_ds,
-        chapitre,
-        questions: payload.questions,
-      };
-      const next = existing.slice();
-      next[idx] = updated;
-      writeLocalQuizzes(next);
-      return updated;
-    }
-  }
-
-  const row: QuizRow = {
-    id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    matiere: payload.matiere.trim(),
-    section_ds,
-    chapitre,
-    questions: payload.questions,
-    origin: 'local',
-    created_at: new Date().toISOString(),
-  };
-  writeLocalQuizzes([row, ...existing]);
-  return row;
-}
-
-/**
- * Merges incoming questions into a local row matching (matiere, section_ds) without
- * overwriting any existing local or seed questions.
- */
-export function mergeLocalQuizSection(payload: {
-  matiere: string;
-  section_ds: string;
-  questions: QuizQuestion[];
-}): { row: QuizRow; mergedCount: number } {
-  const existing = loadLocalQuizzes();
-  const matiere = payload.matiere.trim();
-  const section_ds = normalizeSectionDs(payload.section_ds);
-
-  const idx = existing.findIndex(
-    (r) => r.matiere === matiere && normalizeSectionDs(r.section_ds) === section_ds
-  );
-
-  if (idx !== -1) {
-    const target = existing[idx];
-    const mergedQuestions = mergeQuestionsIntoBatch(target.questions, payload.questions);
-    const updated: QuizRow = {
-      ...target,
-      questions: mergedQuestions,
-    };
-    const next = existing.slice();
-    next[idx] = updated;
-    writeLocalQuizzes(next);
-    return { row: updated, mergedCount: mergedQuestions.length };
-  }
-
-  const created = saveLocalQuiz({
-    matiere,
-    section_ds,
-    chapitre: `Ajout ${section_ds}`,
-    questions: payload.questions,
-  });
-  return { row: created, mergedCount: created.questions.length };
-}
-
-export function deleteLocalQuiz(id: string): void {
-  const existing = loadLocalQuizzes().filter((r) => r.id !== id);
-  writeLocalQuizzes(existing);
-}
-
-function loadCachedSupabaseQuizzes(): QuizRow[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_CACHE_KEY);
+    const raw = localStorage.getItem(STORAGE_QUIZZES_CACHE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
@@ -248,6 +101,7 @@ function loadCachedSupabaseQuizzes(): QuizRow[] {
           ...r,
           section_ds: normalizeSectionDs(r.section_ds),
           chapitre: r.chapitre || 'Banque générale',
+          origin: 'supabase',
         }))
       : [];
   } catch {
@@ -257,33 +111,29 @@ function loadCachedSupabaseQuizzes(): QuizRow[] {
 
 function saveCachedSupabaseQuizzes(rows: QuizRow[]): void {
   try {
-    localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify(rows));
+    localStorage.setItem(STORAGE_QUIZZES_CACHE_KEY, JSON.stringify(rows));
   } catch {
     // Ignore quota errors
   }
 }
 
+/**
+ * Fetches the authoritative quiz catalog directly from Supabase.
+ * Never mixes local drafts or fake seed rows: when Supabase returns [],
+ * the cache is cleared and [] is returned so every user sees the exact same state.
+ */
 export async function fetchQuizzes(): Promise<FetchQuizzesResult> {
-  const localQuizzes = loadLocalQuizzes();
-
   try {
     const { data, error } = await supabase
       .from('quizzes')
-      .select('id, matiere, section_ds, chapitre, questions, created_at');
+      .select('id, matiere, section_ds, chapitre, questions, created_at, updated_at')
+      .order('created_at', { ascending: true });
 
     if (error) {
-      const cached = loadCachedSupabaseQuizzes();
-      if (cached.length > 0) {
-        return {
-          rows: [...localQuizzes, ...cached],
-          source: 'cache',
-          supabaseError: `${error.code ?? 'SUPABASE'} : ${error.message}`,
-        };
-      }
       return {
-        rows: [...localQuizzes, ...SEED_QUIZZES],
-        source: 'seed',
-        supabaseError: `${error.code ?? 'SUPABASE'} : ${error.message}`,
+        rows: loadCachedSupabaseQuizzes(),
+        source: 'offline-cache',
+        error: `${error.code ?? 'SUPABASE'} : ${error.message}`,
       };
     }
 
@@ -291,32 +141,17 @@ export async function fetchQuizzes(): Promise<FetchQuizzesResult> {
       .map(hydrateSupabaseRow)
       .filter((r): r is QuizRow => r !== null);
 
-    if (hydrated.length > 0) {
-      saveCachedSupabaseQuizzes(hydrated);
-      return {
-        rows: [...localQuizzes, ...hydrated],
-        source: 'supabase',
-      };
-    }
-
+    saveCachedSupabaseQuizzes(hydrated);
     return {
-      rows: [...localQuizzes, ...SEED_QUIZZES],
-      source: 'seed',
+      rows: hydrated,
+      source: 'supabase',
     };
   } catch (err) {
-    const cached = loadCachedSupabaseQuizzes();
     const message = err instanceof Error ? err.message : 'Erreur réseau Supabase';
-    if (cached.length > 0) {
-      return {
-        rows: [...localQuizzes, ...cached],
-        source: 'cache',
-        supabaseError: message,
-      };
-    }
     return {
-      rows: [...localQuizzes, ...SEED_QUIZZES],
-      source: 'seed',
-      supabaseError: message,
+      rows: loadCachedSupabaseQuizzes(),
+      source: 'offline-cache',
+      error: message,
     };
   }
 }
@@ -326,15 +161,6 @@ export interface UpsertQuizResult {
   row?: QuizRow;
   totalQuestionsAfterMerge?: number;
   error?: string;
-  isMissingTable?: boolean;
-}
-
-function isSupabaseMissingTable(error: { code?: string; message: string }): boolean {
-  return (
-    error.code === 'PGRST205' ||
-    error.code === '42P01' ||
-    /could not find the table/i.test(error.message)
-  );
 }
 
 export async function insertQuizToSupabase(payload: {
@@ -363,7 +189,6 @@ export async function insertQuizToSupabase(payload: {
       return {
         ok: false,
         error: `${error.code ?? 'Erreur Supabase'} : ${error.message}`,
-        isMissingTable: isSupabaseMissingTable(error),
       };
     }
 
@@ -390,8 +215,7 @@ export async function insertQuizToSupabase(payload: {
 
 /**
  * Merges a new batch of questions directly into an existing (matiere, section_ds)
- * row in Supabase without overwriting any already-present questions.
- * Creates the section row if none exists yet in Supabase.
+ * row in Supabase without overwriting already-present questions.
  */
 export async function appendQuestionsToSectionDsInSupabase(payload: {
   matiere: string;
@@ -414,7 +238,6 @@ export async function appendQuestionsToSectionDsInSupabase(payload: {
       return {
         ok: false,
         error: `${fetchError.code ?? 'Erreur Supabase'} : ${fetchError.message}`,
-        isMissingTable: isSupabaseMissingTable(fetchError),
       };
     }
 
@@ -443,7 +266,6 @@ export async function appendQuestionsToSectionDsInSupabase(payload: {
       return {
         ok: false,
         error: `${updateError.code ?? 'Erreur Supabase'} : ${updateError.message}`,
-        isMissingTable: isSupabaseMissingTable(updateError),
       };
     }
 
@@ -491,7 +313,6 @@ export async function updateQuizInSupabase(
       return {
         ok: false,
         error: `${error.code ?? 'Erreur Supabase'} : ${error.message}`,
-        isMissingTable: isSupabaseMissingTable(error),
       };
     }
 
@@ -505,8 +326,66 @@ export async function updateQuizInSupabase(
   }
 }
 
+export async function deleteQuizInSupabase(id: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.from('quizzes').delete().eq('id', id);
+    if (error) {
+      return { ok: false, error: `${error.code ?? 'Erreur Supabase'} : ${error.message}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Impossible de joindre Supabase.',
+    };
+  }
+}
+
+/**
+ * Optional 1-click Admin action: publishes the curated ESET 3A starter bank directly
+ * into Supabase so all users receive real shared rows immediately.
+ */
+export async function publishStarterBankToSupabase(): Promise<{
+  ok: boolean;
+  insertedCount: number;
+  error?: string;
+}> {
+  try {
+    const payload = SEED_QUIZZES.map((row) => ({
+      matiere: row.matiere,
+      section_ds: normalizeSectionDs(row.section_ds),
+      chapitre: row.chapitre || row.section_ds,
+      questions: row.questions,
+    }));
+
+    const { data, error } = await supabase
+      .from('quizzes')
+      .insert(payload)
+      .select('id');
+
+    if (error) {
+      return {
+        ok: false,
+        insertedCount: 0,
+        error: `${error.code ?? 'Erreur Supabase'} : ${error.message}`,
+      };
+    }
+
+    return {
+      ok: true,
+      insertedCount: Array.isArray(data) ? data.length : payload.length,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      insertedCount: 0,
+      error: err instanceof Error ? err.message : 'Impossible de joindre Supabase.',
+    };
+  }
+}
+
 // ============================================================================
-// SCORES / LEADERBOARD (SUPABASE `scores` + LOCAL FALLBACK)
+// SCORES / LEADERBOARD — SUPABASE SINGLE SOURCE OF TRUTH (+ OFFLINE OUTBOX)
 // ============================================================================
 interface RawSupabaseScoreRow {
   id: string | number;
@@ -536,31 +415,23 @@ function hydrateScoreRow(raw: RawSupabaseScoreRow): ScoreEntry | null {
   };
 }
 
-export function loadLocalScores(): ScoreEntry[] {
+function loadPendingScores(): PendingScorePayload[] {
   try {
-    const raw = localStorage.getItem(STORAGE_LOCAL_SCORES_KEY);
+    const raw = localStorage.getItem(STORAGE_PENDING_SCORES_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as ScoreEntry[]) : [];
+    return Array.isArray(parsed) ? (parsed as PendingScorePayload[]) : [];
   } catch {
     return [];
   }
 }
 
-function saveLocalScore(entry: Omit<ScoreEntry, 'id' | 'origin'>): ScoreEntry {
-  const existing = loadLocalScores();
-  const created: ScoreEntry = {
-    ...entry,
-    id: `local-sc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    created_at: entry.created_at ?? new Date().toISOString(),
-    origin: 'local',
-  };
+function writePendingScores(items: PendingScorePayload[]): void {
   try {
-    localStorage.setItem(STORAGE_LOCAL_SCORES_KEY, JSON.stringify([created, ...existing]));
+    localStorage.setItem(STORAGE_PENDING_SCORES_KEY, JSON.stringify(items));
   } catch {
-    // Ignore
+    // Ignore storage issues
   }
-  return created;
 }
 
 function loadCachedScores(): ScoreEntry[] {
@@ -582,13 +453,46 @@ function saveCachedScores(rows: ScoreEntry[]): void {
   }
 }
 
+/**
+ * Flushes any scores recorded while offline up to Supabase as soon as connection returns.
+ */
+export async function flushPendingScores(): Promise<number> {
+  const pending = loadPendingScores();
+  if (pending.length === 0) return 0;
+
+  const syncedIds = new Set<string>();
+  for (const item of pending) {
+    try {
+      const { error } = await supabase.from('scores').insert({
+        pseudo: item.pseudo,
+        matiere: item.matiere,
+        section_ds: item.section_ds,
+        points: item.points,
+        bonnes_reponses: item.bonnes_reponses,
+        total_questions: item.total_questions,
+      });
+      if (!error) {
+        syncedIds.add(item.clientId);
+      }
+    } catch {
+      break;
+    }
+  }
+
+  if (syncedIds.size > 0) {
+    writePendingScores(removeSyncedPendingScores(pending, syncedIds));
+  }
+  return syncedIds.size;
+}
+
 export interface FetchScoresResult {
   scores: ScoreEntry[];
-  source: 'supabase' | 'cache' | 'seed';
+  source: 'supabase' | 'offline-cache';
 }
 
 export async function fetchScores(matiere?: string): Promise<FetchScoresResult> {
-  const localScores = loadLocalScores();
+  await flushPendingScores();
+  const pending = loadPendingScores();
 
   try {
     let query = supabase
@@ -603,35 +507,35 @@ export async function fetchScores(matiere?: string): Promise<FetchScoresResult> 
     const { data, error } = await query;
 
     if (error) {
-      const cached = loadCachedScores();
-      if (cached.length > 0) {
-        return { scores: [...localScores, ...cached], source: 'cache' };
-      }
-      return { scores: [...localScores, ...SEED_SCORES], source: 'seed' };
+      return {
+        scores: mergeRemoteAndPendingScores(loadCachedScores(), pending),
+        source: 'offline-cache',
+      };
     }
 
     const hydrated = ((data as RawSupabaseScoreRow[] | null) ?? [])
       .map(hydrateScoreRow)
       .filter((s): s is ScoreEntry => s !== null);
 
-    if (hydrated.length > 0) {
-      if (!matiere) saveCachedScores(hydrated);
-      return { scores: [...localScores, ...hydrated], source: 'supabase' };
+    if (!matiere) {
+      saveCachedScores(hydrated);
     }
 
-    return { scores: [...localScores, ...SEED_SCORES], source: 'seed' };
+    return {
+      scores: mergeRemoteAndPendingScores(hydrated, pending),
+      source: 'supabase',
+    };
   } catch {
-    const cached = loadCachedScores();
-    if (cached.length > 0) {
-      return { scores: [...localScores, ...cached], source: 'cache' };
-    }
-    return { scores: [...localScores, ...SEED_SCORES], source: 'seed' };
+    return {
+      scores: mergeRemoteAndPendingScores(loadCachedScores(), pending),
+      source: 'offline-cache',
+    };
   }
 }
 
 export interface InsertScoreResult {
   entry: ScoreEntry;
-  persistedTo: 'supabase' | 'local';
+  persistedTo: 'supabase' | 'pending';
 }
 
 export async function recordQuizScore(payload: {
@@ -665,15 +569,59 @@ export async function recordQuizScore(payload: {
       }
     }
   } catch {
-    // Fall through to local persistence when offline or table not yet created
+    // Queue in offline outbox below
   }
 
-  const localEntry = saveLocalScore(cleanPayload);
-  return { entry: localEntry, persistedTo: 'local' };
+  const queued: PendingScorePayload = {
+    ...cleanPayload,
+    clientId: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    created_at: new Date().toISOString(),
+  };
+  writePendingScores([queued, ...loadPendingScores()]);
+
+  return {
+    entry: {
+      id: queued.clientId,
+      ...cleanPayload,
+      created_at: queued.created_at,
+      origin: 'local',
+    },
+    persistedTo: 'pending',
+  };
 }
 
 // ============================================================================
-// PROGRESS PERSISTENCE
+// REALTIME SUBSCRIPTION (AUTO-SYNC NEW QUIZZES & SCORES FOR ALL USERS)
+// ============================================================================
+export function subscribeToSupabaseChanges(handlers: {
+  onQuizzesChanged: () => void;
+  onScoresChanged: () => void;
+}): () => void {
+  const channel = supabase
+    .channel('coach-partiels-live-sync')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'quizzes' },
+      () => {
+        handlers.onQuizzesChanged();
+      }
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'scores' },
+      () => {
+        handlers.onScoresChanged();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    void supabase.removeChannel(channel);
+  };
+}
+
+// ============================================================================
+// PERSONAL PROGRESS PERSISTENCE (per-student local mastery tracking)
 // ============================================================================
 export function loadProgress(): ProgressMap {
   try {

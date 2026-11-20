@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Database, Lock, RefreshCw, WifiOff } from 'lucide-react';
 import { AdminImportModal } from './components/AdminImportModal';
 import { Header } from './components/Header';
 import { MobileBottomNav } from './components/MobileBottomNav';
@@ -12,11 +13,13 @@ import { useTheme } from './hooks/useTheme';
 import {
   fetchQuizzes,
   fetchScores,
+  loadCachedSupabaseQuizzes,
   loadProgress,
   loadStudentPseudo,
   recordQuizScore,
   saveProgress,
   saveStudentPseudo,
+  subscribeToSupabaseChanges,
 } from './lib/supabase';
 import type {
   ExamSize,
@@ -33,6 +36,7 @@ import {
   selectQuizQuestions,
   shuffleArray,
 } from './utils/quizEngine';
+import { shouldTriggerBackgroundSync } from './utils/syncState';
 
 type AppView = 'subject' | 'quiz' | 'results';
 
@@ -45,6 +49,8 @@ interface ActiveSession {
   answers: Array<UserAnswer | null>;
 }
 
+const FOREGROUND_SYNC_INTERVAL_MS = 5_000;
+
 export default function App() {
   const { preference: theme, setPreference: setTheme } = useTheme();
 
@@ -52,8 +58,12 @@ export default function App() {
   const [pseudo, setPseudo] = useState<string>(() => loadStudentPseudo());
   const [pseudoModalOpen, setPseudoModalOpen] = useState<boolean>(() => !loadStudentPseudo());
 
-  const [rows, setRows] = useState<QuizRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Instant hydration from read-only offline cache; immediately refreshed from Supabase on mount
+  const [rows, setRows] = useState<QuizRow[]>(() => loadCachedSupabaseQuizzes());
+  const [loading, setLoading] = useState<boolean>(() => loadCachedSupabaseQuizzes().length === 0);
+  const [syncing, setSyncing] = useState<boolean>(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
   const [scores, setScores] = useState<ScoreEntry[]>([]);
   const [scoresLoading, setScoresLoading] = useState(false);
   const [progress, setProgress] = useState<ProgressMap>(() => loadProgress());
@@ -64,34 +74,93 @@ export default function App() {
   const [leaderboardSectionFilter, setLeaderboardSectionFilter] = useState<string>('all');
 
   const [session, setSession] = useState<ActiveSession | null>(null);
-  const [scoreSavedStatus, setScoreSavedStatus] = useState<'saving' | 'supabase' | 'local' | null>(
-    null
-  );
+  const [scoreSavedStatus, setScoreSavedStatus] = useState<
+    'saving' | 'supabase' | 'pending' | null
+  >(null);
   const [adminOpen, setAdminOpen] = useState(false);
 
-  const loadQuizzes = useCallback(async () => {
-    setLoading(true);
+  const lastSyncAtRef = useRef<number>(0);
+
+  const loadQuizzes = useCallback(async (opts?: { silent?: boolean }) => {
+    lastSyncAtRef.current = Date.now();
+    if (!opts?.silent) {
+      setSyncing(true);
+    }
+
     const result = await fetchQuizzes();
     setRows(result.rows);
+    setSyncError(result.error ?? null);
     setLoading(false);
+    setSyncing(false);
   }, []);
 
-  const loadAllScores = useCallback(async () => {
-    setScoresLoading(true);
+  const loadAllScores = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) {
+      setScoresLoading(true);
+    }
     const result = await fetchScores();
     setScores(result.scores);
     setScoresLoading(false);
   }, []);
 
+  // 1. Initial sync from Supabase on mount
   useEffect(() => {
     void loadQuizzes();
     void loadAllScores();
   }, [loadQuizzes, loadAllScores]);
 
+  // 2. Automatic Realtime sync whenever quizzes or scores change in Supabase
+  useEffect(() => {
+    return subscribeToSupabaseChanges({
+      onQuizzesChanged: () => {
+        void loadQuizzes({ silent: true });
+      },
+      onScoresChanged: () => {
+        void loadAllScores({ silent: true });
+      },
+    });
+  }, [loadQuizzes, loadAllScores]);
+
+  // 3. Automatic foreground / reconnect resync (ideal for mobile PWAs waking from background)
+  useEffect(() => {
+    const syncIfStale = () => {
+      if (shouldTriggerBackgroundSync(lastSyncAtRef.current, Date.now(), FOREGROUND_SYNC_INTERVAL_MS)) {
+        void loadQuizzes({ silent: true });
+        void loadAllScores({ silent: true });
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncIfStale();
+      }
+    };
+
+    const handleOnline = () => {
+      void loadQuizzes({ silent: true });
+      void loadAllScores({ silent: true });
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', syncIfStale);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', syncIfStale);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [loadQuizzes, loadAllScores]);
+
   const subjects = useMemo(() => buildSubjectSummaries(rows, progress), [rows, progress]);
 
+  // Keep selectedMatiere valid even if subjects are added or deleted in Supabase
   useEffect(() => {
-    if (!selectedMatiere && subjects.length > 0) {
+    if (subjects.length === 0) {
+      if (selectedMatiere !== '') setSelectedMatiere('');
+      return;
+    }
+    if (!selectedMatiere || !subjects.some((s) => s.matiere === selectedMatiere)) {
       setSelectedMatiere(subjects[0].matiere);
     }
   }, [subjects, selectedMatiere]);
@@ -267,7 +336,7 @@ export default function App() {
         <SubjectTabsBar
           subjects={subjects}
           activeMatiere={currentSubject?.matiere ?? null}
-          loading={loading}
+          loading={syncing}
           onSelectMatiere={handleSelectMatiere}
           onRefresh={() => {
             void loadQuizzes();
@@ -293,6 +362,59 @@ export default function App() {
               </div>
             ))}
           </div>
+        )}
+
+        {/* Empty / Offline State when Supabase currently has 0 quizzes */}
+        {!loading && view === 'subject' && !currentSubject && (
+          <section className="mx-auto max-w-lg px-4 py-12 sm:py-16">
+            <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 sm:p-8 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
+                {syncError ? <WifiOff className="h-6 w-6" /> : <Database className="h-6 w-6" />}
+              </div>
+
+              <h1 className="mt-4 text-[19px] font-bold text-[var(--text)]">
+                {syncError
+                  ? 'Connexion Supabase indisponible'
+                  : 'Aucun quiz publié sur Supabase'}
+              </h1>
+
+              <p className="mt-2 text-[14.5px] leading-relaxed text-[var(--dim)]">
+                {syncError
+                  ? 'Impossible de récupérer les quiz pour le moment. Vérifiez votre connexion réseau puis réessayez.'
+                  : 'Dès qu’un quiz est publié dans Supabase, tous les étudiants le reçoivent automatiquement ici.'}
+              </p>
+
+              <div className="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2.5">
+                {!syncError && (
+                  <button
+                    type="button"
+                    onClick={() => setAdminOpen(true)}
+                    className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-5 py-2.5 text-[14px] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]"
+                  >
+                    <Lock className="h-4 w-4 shrink-0" />
+                    <span>Publier un quiz (Admin)</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={syncing}
+                  onClick={() => {
+                    void loadQuizzes();
+                    void loadAllScores();
+                  }}
+                  className={`inline-flex min-h-[46px] items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-[14px] font-semibold transition-colors disabled:opacity-50 ${
+                    syncError
+                      ? 'bg-[var(--accent)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]'
+                      : 'border border-[var(--line)] bg-[var(--surface-2)] text-[var(--text)] hover:border-[var(--accent)]'
+                  }`}
+                >
+                  <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? 'animate-spin' : ''}`} />
+                  <span>{syncError ? 'Réessayer' : 'Actualiser'}</span>
+                </button>
+              </div>
+            </div>
+          </section>
         )}
 
         {view === 'subject' && currentSubject && (
@@ -354,7 +476,7 @@ export default function App() {
       </main>
 
       {/* Thumb-Zone Mobile Bottom Tab Bar (Révisions | Classement) */}
-      {view !== 'quiz' && (
+      {view !== 'quiz' && subjects.length > 0 && (
         <MobileBottomNav activeSubTab={activeSubTab} onChangeSubTab={handleChangeSubTab} />
       )}
 
@@ -371,7 +493,10 @@ export default function App() {
         existingSubjects={subjects.map((s) => s.matiere)}
         allQuizzes={rows}
         onClose={() => setAdminOpen(false)}
-        onImported={loadQuizzes}
+        onImported={async () => {
+          await loadQuizzes();
+          await loadAllScores({ silent: true });
+        }}
       />
     </div>
   );

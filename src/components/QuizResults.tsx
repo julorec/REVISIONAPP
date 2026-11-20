@@ -8,7 +8,7 @@ interface QuizResultsProps {
   title: string;
   sectionDs: string;
   pseudo: string;
-  scoreSavedStatus: 'saving' | 'supabase' | 'local' | null;
+  scoreSavedStatus: 'saving' | 'supabase' | 'pending' | null;
   questions: HydratedQuestion[];
   answers: Array<UserAnswer | null>;
   summary: QuizResultSummary;
@@ -84,6 +84,14 @@ export function QuizResults({
             <span className="text-[var(--text)]">
               {scoreSavedStatus === 'saving' ? (
                 <>Enregistrement du score pour <strong>{pseudo || 'Étudiant'}</strong>...</>
+              ) : scoreSavedStatus === 'pending' ? (
+                <>
+                  Score enregistré hors-ligne pour <strong>{pseudo || 'Étudiant'}</strong> ({sectionDs}) :{' '}
+                  <strong className="font-mono-code text-[var(--accent)]">
+                    +{summary.points} pts
+                  </strong>{' '}
+                  — synchronisation automatique dès le retour du réseau.
+                </>
               ) : (
                 <>
                   Score enregistré pour <strong>{pseudo || 'Étudiant'}</strong> ({sectionDs}) :{' '}

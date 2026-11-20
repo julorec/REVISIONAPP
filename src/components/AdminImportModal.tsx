@@ -2,25 +2,22 @@ import { useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
-  Copy,
   Database,
   FileJson,
   FolderPlus,
   GitMerge,
-  HardDrive,
   Lock,
   Pencil,
+  Sparkles,
   Trash2,
   Upload,
   X,
 } from 'lucide-react';
 import {
-  CREATE_QUIZZES_TABLE_SQL,
   appendQuestionsToSectionDsInSupabase,
-  deleteLocalQuiz,
+  deleteQuizInSupabase,
   insertQuizToSupabase,
-  mergeLocalQuizSection,
-  saveLocalQuiz,
+  publishStarterBankToSupabase,
   updateQuizInSupabase,
 } from '../lib/supabase';
 import type { QuizRow } from '../types/quiz';
@@ -87,8 +84,14 @@ export function AdminImportModal({
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
 
-  const [importMode, setImportMode] = useState<ImportMode>('merge');
+  const [importMode, setImportMode] = useState<ImportMode>(() =>
+    allQuizzes.length > 0 ? 'merge' : 'new'
+  );
   const [editingRow, setEditingRow] = useState<QuizRow | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [publishingStarter, setPublishingStarter] = useState(false);
+
   const [matiere, setMatiere] = useState('Programmation C');
   const [sectionDs, setSectionDs] = useState('DS 1');
   const [jsonText, setJsonText] = useState('');
@@ -96,13 +99,10 @@ export function AdminImportModal({
   const [statusMsg, setStatusMsg] = useState<{
     kind: 'success' | 'error';
     text: string;
-    showSqlHelper?: boolean;
   } | null>(null);
-  const [copiedSql, setCopiedSql] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Existing sections for the selected subject with live question counts
   const existingSectionsWithCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const row of allQuizzes) {
@@ -123,17 +123,15 @@ export function AdminImportModal({
     return match?.count ?? 0;
   }, [existingSectionsWithCounts, sectionDs]);
 
-  const editableQuizzes = useMemo(
-    () => allQuizzes.filter((r) => r.origin === 'supabase' || r.origin === 'local'),
-    [allQuizzes]
-  );
-
   const validation = useMemo(() => {
     if (!jsonText.trim()) return null;
     return normalizeQuestionList(jsonText, 'import');
   }, [jsonText]);
 
   if (!open) return null;
+
+  const effectiveMode: ImportMode =
+    allQuizzes.length === 0 && !editingRow ? 'new' : importMode;
 
   const resetForm = () => {
     setEditingRow(null);
@@ -146,13 +144,14 @@ export function AdminImportModal({
       .filter((r) => r.matiere === nextMatiere)
       .map((r) => normalizeSectionDs(r.section_ds))
       .sort((a, b) => a.localeCompare(b, 'fr', { numeric: true }));
-    if (importMode === 'merge' && matchingSecs.length > 0 && !matchingSecs.includes(sectionDs)) {
+    if (effectiveMode === 'merge' && matchingSecs.length > 0 && !matchingSecs.includes(sectionDs)) {
       setSectionDs(matchingSecs[0]);
     }
   };
 
   const handleStartEdit = (row: QuizRow) => {
     setEditingRow(row);
+    setConfirmDeleteId(null);
     setMatiere(row.matiere);
     setSectionDs(row.section_ds || 'DS 1');
     setJsonText(JSON.stringify(row.questions, null, 2));
@@ -165,6 +164,10 @@ export function AdminImportModal({
       setUnlocked(true);
       setPinError(null);
       setPinInput('');
+      setImportMode(allQuizzes.length > 0 ? 'merge' : 'new');
+      if (existingSubjects.length > 0 && !existingSubjects.includes(matiere)) {
+        handleSelectSubject(existingSubjects[0]);
+      }
     } else {
       setPinError('Code PIN incorrect. Accès réservé.');
     }
@@ -209,33 +212,15 @@ export function AdminImportModal({
     const cleanMatiere = matiere.trim();
     const cleanSection = normalizeSectionDs(sectionDs);
 
-    if (editingRow && editingRow.origin === 'local') {
-      saveLocalQuiz({
-        id: editingRow.id,
-        matiere: cleanMatiere,
-        section_ds: cleanSection,
-        chapitre: editingRow.chapitre || cleanSection,
-        questions: parsed.questions,
-      });
-      setSubmitting(false);
-      setStatusMsg({
-        kind: 'success',
-        text: `Lot local mis à jour (${cleanMatiere} · ${cleanSection}).`,
-      });
-      resetForm();
-      await onImported();
-      return;
-    }
-
     let result;
-    if (editingRow && editingRow.origin === 'supabase') {
+    if (editingRow) {
       result = await updateQuizInSupabase(editingRow.id, {
         matiere: cleanMatiere,
         section_ds: cleanSection,
         chapitre: editingRow.chapitre || cleanSection,
         questions: parsed.questions,
       });
-    } else if (importMode === 'merge') {
+    } else if (effectiveMode === 'merge') {
       result = await appendQuestionsToSectionDsInSupabase({
         matiere: cleanMatiere,
         section_ds: cleanSection,
@@ -256,93 +241,62 @@ export function AdminImportModal({
       setStatusMsg({
         kind: 'success',
         text: editingRow
-          ? `Quiz mis à jour dans Supabase (${cleanMatiere} · ${cleanSection}).`
-          : importMode === 'merge'
-            ? `${parsed.questions.length} question(s) fusionnée(s) dans ${cleanMatiere} · ${cleanSection} (${result.totalQuestionsAfterMerge ?? parsed.questions.length} au total dans Supabase).`
-            : `${parsed.questions.length} question(s) créée(s) dans Supabase (${cleanMatiere} · ${cleanSection}).`,
+          ? `Quiz mis à jour dans Supabase (${cleanMatiere} · ${cleanSection}) — synchronisé pour tous les étudiants.`
+          : effectiveMode === 'merge'
+            ? `${parsed.questions.length} question(s) ajoutée(s) à ${cleanMatiere} · ${cleanSection} (${result.totalQuestionsAfterMerge ?? parsed.questions.length} au total dans Supabase).`
+            : `${parsed.questions.length} question(s) publiée(s) dans Supabase (${cleanMatiere} · ${cleanSection}) — visible par tous les étudiants.`,
       });
       resetForm();
       await onImported();
     } else {
       setStatusMsg({
         kind: 'error',
-        text: result.error || "Échec de l'enregistrement Supabase.",
-        showSqlHelper: result.isMissingTable,
+        text: result.error || "Échec de l'enregistrement dans Supabase.",
       });
     }
   };
 
-  const handleSaveLocally = async () => {
-    if (!matiere.trim() || !sectionDs.trim()) {
+  const handleDeleteSupabaseRow = async (row: QuizRow) => {
+    setDeletingId(row.id);
+    setStatusMsg(null);
+    const result = await deleteQuizInSupabase(row.id);
+    setDeletingId(null);
+    setConfirmDeleteId(null);
+
+    if (result.ok) {
+      if (editingRow?.id === row.id) resetForm();
+      setStatusMsg({
+        kind: 'success',
+        text: `Lot supprimé de Supabase (${row.matiere} · ${row.section_ds}).`,
+      });
+      await onImported();
+    } else {
       setStatusMsg({
         kind: 'error',
-        text: 'Renseignez la matière et la section DS pour enregistrer localement.',
+        text: result.error || 'Échec de la suppression dans Supabase.',
       });
-      return;
     }
-    const parsed = normalizeQuestionList(jsonText, `loc-${Date.now().toString(36)}`);
-    if (!parsed.ok) {
-      setStatusMsg({ kind: 'error', text: parsed.errors[0] || 'Format JSON invalide.' });
-      return;
-    }
+  };
 
-    const cleanMatiere = matiere.trim();
-    const cleanSection = normalizeSectionDs(sectionDs);
+  const handlePublishStarterBank = async () => {
+    setPublishingStarter(true);
+    setStatusMsg(null);
+    const res = await publishStarterBankToSupabase();
+    setPublishingStarter(false);
 
-    if (editingRow?.origin === 'local') {
-      saveLocalQuiz({
-        id: editingRow.id,
-        matiere: cleanMatiere,
-        section_ds: cleanSection,
-        chapitre: editingRow.chapitre || cleanSection,
-        questions: parsed.questions,
-      });
+    if (res.ok) {
       setStatusMsg({
         kind: 'success',
-        text: `Lot local mis à jour (${cleanMatiere} · ${cleanSection}).`,
+        text: `${res.insertedCount} banques d'exemple publiées dans Supabase — disponibles pour tous les étudiants.`,
       });
-    } else if (importMode === 'merge') {
-      mergeLocalQuizSection({
-        matiere: cleanMatiere,
-        section_ds: cleanSection,
-        questions: parsed.questions,
-      });
-      const newTotal = targetSectionExistingCount + parsed.questions.length;
-      setStatusMsg({
-        kind: 'success',
-        text: `${parsed.questions.length} question(s) ajoutée(s) à ${cleanMatiere} · ${cleanSection} sans écraser l'existant (${newTotal} questions au total).`,
-      });
+      setImportMode('merge');
+      await onImported();
     } else {
-      saveLocalQuiz({
-        matiere: cleanMatiere,
-        section_ds: cleanSection,
-        chapitre: cleanSection,
-        questions: parsed.questions,
-      });
       setStatusMsg({
-        kind: 'success',
-        text: `${parsed.questions.length} question(s) enregistrée(s) localement (${cleanMatiere} · ${cleanSection}).`,
+        kind: 'error',
+        text: res.error || "Impossible de publier les quiz d'exemple dans Supabase.",
       });
     }
-
-    resetForm();
-    await onImported();
-  };
-
-  const handleCopySql = async () => {
-    try {
-      await navigator.clipboard.writeText(CREATE_QUIZZES_TABLE_SQL);
-      setCopiedSql(true);
-      setTimeout(() => setCopiedSql(false), 2000);
-    } catch {
-      // Fallback ignored
-    }
-  };
-
-  const handleDeleteLocal = async (id: string) => {
-    deleteLocalQuiz(id);
-    if (editingRow?.id === id) resetForm();
-    await onImported();
   };
 
   return (
@@ -362,7 +316,7 @@ export function AdminImportModal({
           <div className="flex items-center gap-2.5">
             <Lock className="h-4 w-4 text-[var(--accent)]" />
             <h2 id="admin-modal-title" className="text-[17px] font-semibold text-[var(--text)]">
-              Espace Admin — Import JSON
+              Espace Admin — Supabase
             </h2>
           </div>
           <button
@@ -379,8 +333,9 @@ export function AdminImportModal({
         {!unlocked ? (
           <form onSubmit={handleUnlock} className="p-6">
             <p className="text-[14.5px] text-[var(--dim)]">
-              Entrez le code PIN administrateur pour fusionner ou créer des banques de questions dans{' '}
-              <code className="font-mono-code text-[var(--text)]">quizzes</code>.
+              Entrez le code PIN administrateur pour publier, fusionner ou supprimer des quiz dans{' '}
+              <code className="font-mono-code text-[var(--text)]">Supabase</code>. Toute modification
+              est automatiquement diffusée à tous les étudiants.
             </p>
 
             <div className="mt-4">
@@ -424,12 +379,38 @@ export function AdminImportModal({
             </div>
           </form>
         ) : (
-          /* ==================== MERGE / CREATE / EDIT WORKSPACE ==================== */
+          /* ==================== SUPABASE-DIRECT ADMIN WORKSPACE ==================== */
           <form onSubmit={handleSubmitSupabase} className="p-5 sm:p-6 space-y-4">
+            {/* Optional 1-click starter publish when Supabase is empty */}
+            {allQuizzes.length === 0 && !editingRow && (
+              <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-[13.5px] text-[var(--dim)]">
+                  <p className="font-semibold text-[var(--text)]">Base Supabase vide</p>
+                  <p className="mt-0.5">
+                    Importez un JSON ci-dessous ou publiez les quiz de démarrage ESET 3A en un clic.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={publishingStarter}
+                  onClick={handlePublishStarterBank}
+                  className="inline-flex min-h-[42px] shrink-0 items-center justify-center gap-2 rounded-xl border border-[var(--accent)] bg-[var(--accent-soft)] px-3.5 py-2 text-[13px] font-semibold text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] transition-colors disabled:opacity-50"
+                >
+                  <Sparkles className="h-4 w-4 shrink-0" />
+                  <span>
+                    {publishingStarter
+                      ? 'Publication...'
+                      : "Publier les quiz d'exemple dans Supabase"}
+                  </span>
+                </button>
+              </div>
+            )}
+
             {editingRow ? (
               <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--accent)] bg-[var(--accent-soft)] px-3.5 py-2.5 text-[13px]">
                 <span className="font-medium text-[var(--text)]">
-                  Modification de : <strong>{editingRow.matiere}</strong> · {editingRow.section_ds}
+                  Modification Supabase : <strong>{editingRow.matiere}</strong> ·{' '}
+                  {editingRow.section_ds}
                 </span>
                 <button
                   type="button"
@@ -441,47 +422,49 @@ export function AdminImportModal({
               </div>
             ) : (
               /* Import Mode Switcher: Merge into existing DS vs Create new DS */
-              <div
-                className="grid grid-cols-1 gap-2 sm:grid-cols-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-1.5"
-                role="radiogroup"
-                aria-label="Mode d'importation"
-              >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={importMode === 'merge'}
-                  onClick={() => {
-                    setImportMode('merge');
-                    setStatusMsg(null);
-                  }}
-                  className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors ${
-                    importMode === 'merge'
-                      ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
-                      : 'text-[var(--dim)] hover:text-[var(--text)]'
-                  }`}
+              allQuizzes.length > 0 && (
+                <div
+                  className="grid grid-cols-1 gap-2 sm:grid-cols-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-1.5"
+                  role="radiogroup"
+                  aria-label="Mode d'importation"
                 >
-                  <GitMerge className="h-4 w-4 shrink-0" />
-                  <span>Ajouter à une section DS existante</span>
-                </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={effectiveMode === 'merge'}
+                    onClick={() => {
+                      setImportMode('merge');
+                      setStatusMsg(null);
+                    }}
+                    className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors ${
+                      effectiveMode === 'merge'
+                        ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                        : 'text-[var(--dim)] hover:text-[var(--text)]'
+                    }`}
+                  >
+                    <GitMerge className="h-4 w-4 shrink-0" />
+                    <span>Ajouter à une section DS existante</span>
+                  </button>
 
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={importMode === 'new'}
-                  onClick={() => {
-                    setImportMode('new');
-                    setStatusMsg(null);
-                  }}
-                  className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors ${
-                    importMode === 'new'
-                      ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
-                      : 'text-[var(--dim)] hover:text-[var(--text)]'
-                  }`}
-                >
-                  <FolderPlus className="h-4 w-4 shrink-0" />
-                  <span>Créer une nouvelle section DS</span>
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={effectiveMode === 'new'}
+                    onClick={() => {
+                      setImportMode('new');
+                      setStatusMsg(null);
+                    }}
+                    className={`flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors ${
+                      effectiveMode === 'new'
+                        ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                        : 'text-[var(--dim)] hover:text-[var(--text)]'
+                    }`}
+                  >
+                    <FolderPlus className="h-4 w-4 shrink-0" />
+                    <span>Créer une nouvelle section DS</span>
+                  </button>
+                </div>
+              )
             )}
 
             {/* Matiere */}
@@ -492,7 +475,7 @@ export function AdminImportModal({
               >
                 Matière
               </label>
-              {importMode === 'merge' && !editingRow && existingSubjects.length > 0 ? (
+              {effectiveMode === 'merge' && !editingRow && existingSubjects.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
                   {existingSubjects.map((s) => (
                     <button
@@ -549,12 +532,12 @@ export function AdminImportModal({
                 htmlFor="import-section-ds"
                 className="block font-mono-code text-[12px] uppercase tracking-[0.06em] text-[var(--dim)] mb-1.5"
               >
-                {importMode === 'merge' && !editingRow
+                {effectiveMode === 'merge' && !editingRow
                   ? 'Section DS cible (fusion sans écrasement)'
                   : 'Section DS (section_ds)'}
               </label>
 
-              {importMode === 'merge' && !editingRow && existingSectionsWithCounts.length > 0 ? (
+              {effectiveMode === 'merge' && !editingRow && existingSectionsWithCounts.length > 0 ? (
                 <div className="space-y-2">
                   <div className="flex flex-wrap gap-2">
                     {existingSectionsWithCounts.map(({ section_ds: sec, count }) => {
@@ -580,7 +563,7 @@ export function AdminImportModal({
                     })}
                   </div>
                   <p className="text-[12.5px] text-[var(--dim)]">
-                    Les nouvelles questions seront ajoutées à la suite des{' '}
+                    Les nouvelles questions seront fusionnées à la suite des{' '}
                     <strong className="text-[var(--text)] tabular-nums">
                       {targetSectionExistingCount}
                     </strong>{' '}
@@ -674,8 +657,11 @@ export function AdminImportModal({
               />
 
               <p className="mt-1.5 text-[12px] text-[var(--dim)]">
-                Ajoutez <code className="font-mono-code">&quot;themes&quot;: [&quot;Thème 1&quot;, &quot;Thème 2&quot;]</code> à chaque question. Types supportés :{' '}
-                <code className="font-mono-code">qcm</code>,{' '}
+                Ajoutez{' '}
+                <code className="font-mono-code">
+                  &quot;themes&quot;: [&quot;Thème 1&quot;, &quot;Thème 2&quot;]
+                </code>{' '}
+                à chaque question. Types supportés : <code className="font-mono-code">qcm</code>,{' '}
                 <code className="font-mono-code">vrai_faux</code>,{' '}
                 <code className="font-mono-code">calcul</code>,{' '}
                 <code className="font-mono-code">ordre</code> + KaTeX, code et{' '}
@@ -700,7 +686,7 @@ export function AdminImportModal({
                         Format valide : {validation.questions.length} question
                         {validation.questions.length > 1 ? 's' : ''} prête
                         {validation.questions.length > 1 ? 's' : ''}
-                        {importMode === 'merge' && !editingRow
+                        {effectiveMode === 'merge' && !editingRow
                           ? ` (total après fusion : ${targetSectionExistingCount + validation.questions.length})`
                           : ''}
                       </span>
@@ -741,7 +727,7 @@ export function AdminImportModal({
               </div>
             )}
 
-            {/* Status Feedback & Optional SQL Helper */}
+            {/* Status Feedback */}
             {statusMsg && (
               <div
                 role="status"
@@ -752,111 +738,97 @@ export function AdminImportModal({
                 }`}
               >
                 <p className="font-medium">{statusMsg.text}</p>
-
-                {statusMsg.showSqlHelper && (
-                  <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-3 text-[var(--text)]">
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="text-[12px] font-semibold">
-                        Schéma SQL (<code className="font-mono-code">supabase/schema.sql</code>) :
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleCopySql}
-                        className="inline-flex h-7 items-center gap-1 rounded border border-[var(--line)] px-2 text-[11.5px] font-mono-code hover:border-[var(--accent)]"
-                      >
-                        <Copy className="h-3 w-3" />
-                        <span>{copiedSql ? 'Copié' : 'Copier SQL'}</span>
-                      </button>
-                    </div>
-                    <pre className="m-0 max-h-44 overflow-auto rounded bg-[var(--surface-2)] p-2.5 font-mono-code text-[11.5px] leading-[1.45]">
-                      {CREATE_QUIZZES_TABLE_SQL}
-                    </pre>
-                  </div>
-                )}
               </div>
             )}
 
-            {/* Submit Actions */}
-            <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-[var(--line)]">
+            {/* Single Authoritative Action: Direct to Supabase */}
+            <div className="flex items-center gap-2.5 pt-2 border-t border-[var(--line)]">
               <button
                 type="submit"
                 disabled={submitting || !validation?.ok}
-                className="inline-flex min-h-[46px] flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-5 py-2 text-[14px] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-45"
+                className="inline-flex min-h-[48px] w-full sm:w-auto items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-5 py-2 text-[14.5px] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-45"
               >
                 <Database className="h-4 w-4 shrink-0" />
                 <span>
                   {submitting
-                    ? 'Envoi vers Supabase...'
+                    ? 'Publication vers Supabase...'
                     : editingRow
-                      ? 'Enregistrer les modifications'
-                      : importMode === 'merge'
+                      ? 'Enregistrer dans Supabase'
+                      : effectiveMode === 'merge'
                         ? 'Fusionner dans Supabase'
-                        : 'Créer dans Supabase'}
+                        : 'Publier dans Supabase'}
                 </span>
               </button>
-
-              {(!editingRow || editingRow.origin === 'local') && (
-                <button
-                  type="button"
-                  disabled={!validation?.ok}
-                  onClick={handleSaveLocally}
-                  className="inline-flex min-h-[46px] flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-4 py-2 text-[13.5px] font-medium text-[var(--text)] hover:border-[var(--accent)] disabled:opacity-45"
-                >
-                  <HardDrive className="h-4 w-4 shrink-0" />
-                  <span>
-                    {editingRow
-                      ? 'Mettre à jour en local'
-                      : importMode === 'merge'
-                        ? 'Fusionner en local'
-                        : 'Enregistrer en local'}
-                  </span>
-                </button>
-              )}
             </div>
 
-            {/* Existing Editable Quiz Batches (Supabase + Local) */}
-            {editableQuizzes.length > 0 && (
+            {/* Existing Quizzes in Supabase (Edit / Delete directly in Supabase) */}
+            {allQuizzes.length > 0 && (
               <div className="border-t border-[var(--line)] pt-4">
                 <p className="font-mono-code text-[11.5px] uppercase tracking-[0.06em] text-[var(--dim)] mb-2">
-                  Banques importées ({editableQuizzes.length}) — cliquer pour modifier
+                  Quiz publiés sur Supabase ({allQuizzes.length})
                 </p>
                 <ul className="m-0 p-0 list-none space-y-2">
-                  {editableQuizzes.map((row) => (
-                    <li
-                      key={row.id}
-                      className="flex items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-2.5 text-[13px]"
-                    >
-                      <div className="min-w-0">
-                        <span className="font-medium text-[var(--text)]">{row.matiere}</span>
-                        <span className="text-[var(--dim)]">
-                          {' '}
-                          · {row.section_ds} ({row.questions.length} q.)
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleStartEdit(row)}
-                          className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--accent)] hover:bg-[var(--accent-soft)]"
-                          aria-label={`Modifier le lot ${row.matiere} ${row.section_ds}`}
-                          title="Modifier ce lot"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        {row.origin === 'local' && (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteLocal(row.id)}
-                            className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--bad)] hover:bg-[var(--bad-soft)]"
-                            aria-label={`Supprimer le lot local ${row.section_ds}`}
-                            title="Supprimer"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </li>
-                  ))}
+                  {allQuizzes.map((row) => {
+                    const confirming = confirmDeleteId === row.id;
+                    const isDeleting = deletingId === row.id;
+                    return (
+                      <li
+                        key={row.id}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-2.5 text-[13px]"
+                      >
+                        <div className="min-w-0">
+                          <span className="font-medium text-[var(--text)]">{row.matiere}</span>
+                          <span className="text-[var(--dim)]">
+                            {' '}
+                            · {row.section_ds} ({row.questions.length} q.)
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {confirming ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={isDeleting}
+                                onClick={() => void handleDeleteSupabaseRow(row)}
+                                className="h-8 rounded-lg bg-[var(--bad)] px-2.5 text-[12px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                              >
+                                {isDeleting ? 'Suppression...' : 'Confirmer'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isDeleting}
+                                onClick={() => setConfirmDeleteId(null)}
+                                className="h-8 rounded-lg border border-[var(--line)] px-2 text-[12px] text-[var(--dim)] hover:text-[var(--text)]"
+                              >
+                                Annuler
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleStartEdit(row)}
+                                className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                                aria-label={`Modifier le lot ${row.matiere} ${row.section_ds}`}
+                                title="Modifier dans Supabase"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(row.id)}
+                                className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--bad)] hover:bg-[var(--bad-soft)]"
+                                aria-label={`Supprimer le lot ${row.matiere} ${row.section_ds}`}
+                                title="Supprimer de Supabase"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}
