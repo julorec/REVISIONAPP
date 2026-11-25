@@ -9,7 +9,7 @@
 
 Elle regroupe **8 matières**, des simulateurs dédiés à chaque discipline, des sujets d'entraînement corrigés et des fonctionnalités communautaires en temps réel (profils, classement et espace d'entraide).
 
-👉 **Tester l'application en ligne :** [Accéder au site GitHub Pages](https://<votre-utilisateur>.github.io/<votre-depot>/)
+👉 **Tester l'application en ligne :** [Accéder au site GitHub Pages](https://julorec.github.io/REVISIONAPP/)
 
 ---
 
