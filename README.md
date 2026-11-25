@@ -1,4 +1,4 @@
-# 🎓 Coach Partiels — INSA Rennes (ESET 3A)
+# 🎓 Coach Partiels
 
 ![PWA](https://img.shields.io/badge/PWA-Ready-5A0FC8?style=flat-square&logo=pwa)
 ![React](https://img.shields.io/badge/React-Vite-61DAFB?style=flat-square&logo=react)
