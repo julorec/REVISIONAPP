@@ -158,25 +158,23 @@ test('normalizeQuestionList accepts reponse_index, reponse, answer, and ans acro
   );
 });
 
-test('normalizeQuestionList validates difficulte (1, 2, 3), defaults missing to 2, and rejects out-of-range values', () => {
-  const valid = normalizeQuestionList([
-    { type: 'qcm', question: 'Facile', options: ['A', 'B'], reponse_index: 0, difficulte: 1 },
+test('normalizeQuestionList parses difficulte aliases tolerantly and falls back to 2 on unknown values', () => {
+  const res = normalizeQuestionList([
+    { type: 'qcm', question: 'Facile num', options: ['A', 'B'], reponse_index: 0, difficulte: 1 },
     { type: 'qcm', question: 'Sans champ', options: ['A', 'B'], reponse_index: 1 },
-    { type: 'calcul', question: 'Partiel', reponse_numerique: 42, difficulte: 3 },
+    { type: 'calcul', question: 'Partiel num', reponse_numerique: 42, difficulte: 3 },
     { type: 'ordre', question: 'String 2', ordre_correct: ['1', '2'], difficulte: '2' },
+    { type: 'qcm', question: 'Alias facile', options: ['A', 'B'], reponse_index: 0, difficulty: 'Facile' },
+    { type: 'qcm', question: 'Alias partiel', options: ['A', 'B'], reponse_index: 0, niveau: 'Partiel' },
+    { type: 'qcm', question: 'Etoiles', options: ['A', 'B'], reponse_index: 0, 'difficulté': '⭐⭐⭐' },
+    { type: 'qcm', question: 'Hors bornes 4', options: ['A', 'B'], reponse_index: 0, difficulte: 4 },
+    { type: 'qcm', question: 'Inconnu', options: ['A', 'B'], reponse_index: 0, level: 'inconnu' },
   ]);
-  assert.equal(valid.ok, true, valid.errors.join('; '));
+  assert.equal(res.ok, true, res.errors.join('; '));
   assert.deepEqual(
-    valid.questions.map((q) => q.difficulte),
-    [1, 2, 3, 2]
+    res.questions.map((q) => q.difficulte),
+    [1, 2, 3, 2, 1, 3, 3, 2, 2]
   );
-
-  const invalid = normalizeQuestionList([
-    { type: 'qcm', question: 'Trop haut', options: ['A', 'B'], reponse_index: 0, difficulte: 4 },
-    { type: 'qcm', question: 'Zero', options: ['A', 'B'], reponse_index: 0, difficulte: 0 },
-  ]);
-  assert.equal(invalid.ok, false);
-  assert.equal(invalid.errors.length, 2);
 });
 
 

@@ -56,6 +56,10 @@ export function normalizeThemes(rawThemes: unknown, fallbackConcept?: string): s
   return unique.length > 0 ? unique : ['Général'];
 }
 
+function stripAccents(str: string): string {
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 export function normalizeDifficulty(raw: unknown): { value: DifficultyLevel; valid: boolean } {
   if (raw === undefined || raw === null || raw === '') {
     return { value: DEFAULT_DIFFICULTY, valid: true };
@@ -64,16 +68,55 @@ export function normalizeDifficulty(raw: unknown): { value: DifficultyLevel; val
     if (raw === 1 || raw === 2 || raw === 3) {
       return { value: raw, valid: true };
     }
-    return { value: DEFAULT_DIFFICULTY, valid: false };
+    return { value: DEFAULT_DIFFICULTY, valid: true };
   }
   if (typeof raw === 'string') {
-    const cleaned = raw.trim();
-    if (cleaned === '1') return { value: 1, valid: true };
-    if (cleaned === '2') return { value: 2, valid: true };
-    if (cleaned === '3') return { value: 3, valid: true };
-    return { value: DEFAULT_DIFFICULTY, valid: false };
+    const trimmed = raw.trim();
+    if (!trimmed) return { value: DEFAULT_DIFFICULTY, valid: true };
+    const starCount = (trimmed.match(/⭐|★/g) ?? []).length;
+    if (starCount === 1) return { value: 1, valid: true };
+    if (starCount === 2) return { value: 2, valid: true };
+    if (starCount >= 3) return { value: 3, valid: true };
+
+    const cleaned = stripAccents(trimmed).toLowerCase();
+    if (
+      cleaned === '1' ||
+      cleaned === 'facile' ||
+      cleaned === 'easy' ||
+      cleaned === 'base' ||
+      cleaned === 'bases' ||
+      cleaned === 'debutant' ||
+      cleaned === 'cours'
+    ) {
+      return { value: 1, valid: true };
+    }
+    if (
+      cleaned === '2' ||
+      cleaned === 'moyen' ||
+      cleaned === 'moyenne' ||
+      cleaned === 'medium' ||
+      cleaned === 'intermediaire' ||
+      cleaned === 'td' ||
+      cleaned === 'normal'
+    ) {
+      return { value: 2, valid: true };
+    }
+    if (
+      cleaned === '3' ||
+      cleaned === 'difficile' ||
+      cleaned === 'hard' ||
+      cleaned === 'partiel' ||
+      cleaned === 'partiels' ||
+      cleaned === 'avance' ||
+      cleaned === 'expert' ||
+      cleaned === 'piege' ||
+      cleaned === 'pieges'
+    ) {
+      return { value: 3, valid: true };
+    }
+    return { value: DEFAULT_DIFFICULTY, valid: true };
   }
-  return { value: DEFAULT_DIFFICULTY, valid: false };
+  return { value: DEFAULT_DIFFICULTY, valid: true };
 }
 
 export function normalizeQuestionType(raw: unknown, rec: Record<string, unknown>): QuestionType {
@@ -267,11 +310,14 @@ export function normalizeQuestionList(rawInput: unknown, idPrefix = 'q'): Normal
       concept
     );
 
-    const diffCheck = normalizeDifficulty(rec.difficulte ?? rec.difficulté ?? rec.difficulty);
-    if (!diffCheck.valid) {
-      errors.push(`${label} : champ "difficulte" invalide (entier attendu : 1, 2 ou 3).`);
-      return;
-    }
+    const rawDiff = [
+      rec.difficulte,
+      rec.difficulté,
+      rec.difficulty,
+      rec.niveau,
+      rec.level,
+    ].find((v) => v !== undefined && v !== null && String(v).trim() !== '');
+    const diffCheck = normalizeDifficulty(rawDiff);
     const difficulte = diffCheck.value;
 
     const stdin =
