@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AdminDocumentsModal } from './components/AdminDocumentsModal';
+import { AdminModal } from './components/AdminModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { mountCoachApp, type CoachController } from './coach/coachRuntime';
 import { fetchAppSettings } from './lib/supabase';
@@ -38,16 +38,10 @@ export default function App() {
     <>
       <OfflineIndicator />
       <div ref={hostRef} />
-      <AdminDocumentsModal
+      <AdminModal
         open={adminOpen}
         bannerUrl={settings.home_banner_url}
-        getCatalogContext={() =>
-          ctrlRef.current?.getCatalogContext() ?? { dsBySubject: {}, memoBySubject: {} }
-        }
         onClose={() => setAdminOpen(false)}
-        onModulesChanged={async () => {
-          await ctrlRef.current?.refreshModules();
-        }}
         onAppearanceChanged={async () => {
           await loadSettings();
           await ctrlRef.current?.refreshBanner();

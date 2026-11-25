@@ -43,7 +43,6 @@ import {
 import {
   deleteBoardEntry,
   downloadPdfFile,
-  fetchCoachModules,
   fetchHomeBannerOverride,
   getOrCreateStudentUid,
   loadCloudProfile,
@@ -51,11 +50,9 @@ import {
   saveCloudProfile,
   subscribeBoardEntries,
   subscribeChatMessages,
-  subscribeCoachModules,
   upsertBoardEntry,
   type BoardRow,
   type ChatRow,
-  type CoachModuleRow,
 } from './supabaseBackend';
 import {
   isSubjectKind,
@@ -66,7 +63,6 @@ import {
   subInput,
   subWidget,
 } from './subjectEngines';
-import type { ExistingCatalogContext } from '../lib/documentIngestion';
 
 export interface CoachMountOptions {
   root: HTMLElement;
@@ -76,8 +72,6 @@ export interface CoachMountOptions {
 export interface CoachController {
   destroy: () => void;
   refreshBanner: () => Promise<void>;
-  refreshModules: () => Promise<void>;
-  getCatalogContext: () => ExistingCatalogContext;
 }
 
 interface SubjectConfig {
@@ -371,20 +365,20 @@ export function mountCoachApp(options: CoachMountOptions): CoachController {
     return root.querySelector(s) as T | null;
   };
 
-  // Loaded datasets (base static + dynamic Supabase overlay)
-  let BASE_ANN: any[] = [];
-  let BASE_DS: any[] = [];
-  let BASE_ALLQ: any[] = [];
-  let BASE_MEMO_ALL: Record<string, any[]> = {};
+  // Loaded static datasets (coach-data/*.json), base-path aware for root and GitHub Pages
+  const BASE_URL = (import.meta.env.BASE_URL || '/').replace(/\/?$/, '/');
+  const assetUrl = (p: string): string => {
+    if (!p || /^(?:https?:|data:|blob:)/i.test(p)) return p;
+    return `${BASE_URL}${p.replace(/^\/+/, '')}`;
+  };
 
   let ANN: any[] = [];
   let DS: any[] = [];
   let THM: any[] = [];
   let ALLQ: any[] = [];
   let MEMO_ALL: Record<string, any[]> = {};
-  let bannerSrc = '/coach-data/promo-banner.jpg';
+  let bannerSrc = assetUrl('coach-data/promo-banner.jpg');
   let dataLoaded = false;
-  let unsubModules: (() => void) | null = null;
 
   // Navigation & subject state
   let view = 'home';
@@ -4402,144 +4396,39 @@ export function mountCoachApp(options: CoachMountOptions): CoachController {
     { signal }
   );
 
-  // Boot & dynamic Supabase modules merge (coach_modules)
-  function applyDynamicModules(rows: CoachModuleRow[]) {
-    ALLQ = BASE_ALLQ.slice();
-    DS = BASE_DS.map((d) => ({ ...d, ex: (d.ex || []).map((ex: any) => ({ ...ex, subs: (ex.subs || []).slice() })) }));
-    ANN = BASE_ANN.slice();
-    MEMO_ALL = {};
-    Object.keys(BASE_MEMO_ALL).forEach((k) => {
-      MEMO_ALL[k] = (BASE_MEMO_ALL[k] || []).map((item: any) =>
-        Array.isArray(item) ? [item[0], item[1], Array.isArray(item[2]) ? item[2].slice() : item[2]] : { ...item }
-      );
-    });
-
-    const seenQIds = new Set(ALLQ.map((q) => String(q.id)));
-
-    for (const row of rows) {
-      const sk = row.subject_key;
-      if (!CFG[sk]) continue;
-
-      if ((row.module_type === 'ds' || row.module_type === 'theme' || row.module_type === 'annale') && row.payload) {
-        const payload = row.payload;
-        if (row.operation === 'enrich' && row.target_id) {
-          const target = DS.find((d) => d.id === row.target_id && d.s === sk);
-          if (target && Array.isArray(payload.ex)) {
-            target.ex = target.ex.concat(payload.ex);
-            // Re-scale total points cleanly to 20
-            const rawSum = target.ex.reduce(
-              (acc: number, ex: any) => acc + (ex.subs || []).reduce((s: number, u: any) => s + (Number(u.pts) || 1), 0),
-              0
-            );
-            if (rawSum > 0) {
-              const scale = 20 / rawSum;
-              target.ex.forEach((ex: any) => {
-                let exPts = 0;
-                (ex.subs || []).forEach((u: any) => {
-                  u.pts = Math.max(0.5, Math.round((Number(u.pts) || 1) * scale * 4) / 4);
-                  exPts += u.pts;
-                });
-                ex.pts = Math.round(exPts * 100) / 100;
-              });
-            }
-            continue;
-          }
-        }
-        if (!DS.some((d) => d.id === payload.id)) {
-          DS.push(payload);
-        }
-      } else if (row.module_type === 'quiz' && Array.isArray(row.payload)) {
-        for (const q of row.payload) {
-          if (q && !seenQIds.has(String(q.id))) {
-            seenQIds.add(String(q.id));
-            ALLQ.push(q);
-          }
-        }
-      } else if (row.module_type === 'memo' && Array.isArray(row.payload) && row.payload.length >= 3) {
-        const list = (MEMO_ALL[sk] = MEMO_ALL[sk] || []);
-        const [mid, mtitle, mpts] = row.payload;
-        if (row.operation === 'enrich' && row.target_id) {
-          const existing = list.find((it: any) => Array.isArray(it) && it[0] === row.target_id);
-          if (existing && Array.isArray(existing[2]) && Array.isArray(mpts)) {
-            existing[2] = existing[2].concat(mpts);
-            continue;
-          }
-        }
-        if (!list.some((it: any) => Array.isArray(it) && it[0] === mid)) {
-          list.push([mid, mtitle, Array.isArray(mpts) ? mpts : []]);
-        }
-      } else if (row.module_type === 'pdf_annale' && row.payload) {
-        if (!ANN.some((a) => a.id === row.payload.id)) {
-          ANN.push(row.payload);
-        }
-      }
-    }
-
-    QS = ALLQ.filter((q) => (q.s || 'c') === SUB);
-  }
-
-  function getCatalogContext(): ExistingCatalogContext {
-    const dsBySubject: ExistingCatalogContext['dsBySubject'] = {};
-    const memoBySubject: ExistingCatalogContext['memoBySubject'] = {};
-    Object.keys(CFG).forEach((k) => {
-      dsBySubject[k] = DS.filter((d) => d.s === k).map((d) => ({
-        id: d.id,
-        title: d.title,
-        chap: d.chap,
-        th: Boolean(d.th),
-        ann: Boolean(d.ann),
-      }));
-      memoBySubject[k] = (MEMO_ALL[k] || []).map((m: any) => ({
-        id: Array.isArray(m) ? String(m[0]) : String(m.id || ''),
-        title: Array.isArray(m) ? String(m[1]) : String(m.t || ''),
-      }));
-    });
-    return { dsBySubject, memoBySubject };
-  }
-
-  async function refreshModules() {
-    if (!dataLoaded) return;
-    const modRes = await fetchCoachModules();
-    if (signal.aborted) return;
-    applyDynamicModules(modRes.rows);
-    if (store.cur && !run && !dsRun && !thm) {
-      if (view === 'home') viewHome();
-      else show();
-    }
-  }
-
+  // Boot static catalog + Supabase live sync (profiles, leaderboard, chat, banner)
   async function refreshBanner() {
     const custom = await fetchHomeBannerOverride();
-    bannerSrc = custom || '/coach-data/promo-banner.jpg';
+    bannerSrc = custom || assetUrl('coach-data/promo-banner.jpg');
     if (dataLoaded && view === 'home' && store.cur) viewHome();
   }
 
   void (async () => {
     try {
-      const [allqRes, dsRes, thmRes, memoRes, annRes, customBanner, modRes] = await Promise.all([
-        fetch('/coach-data/allq.json').then((r) => r.json()),
-        fetch('/coach-data/ds.json').then((r) => r.json()),
-        fetch('/coach-data/thm.json').then((r) => r.json()),
-        fetch('/coach-data/memo.json').then((r) => r.json()),
-        fetch('/coach-data/annales.json').then((r) => r.json()),
+      const [allqRes, dsRes, thmRes, memoRes, annRes, customBanner] = await Promise.all([
+        fetch(assetUrl('coach-data/allq.json')).then((r) => r.json()),
+        fetch(assetUrl('coach-data/ds.json')).then((r) => r.json()),
+        fetch(assetUrl('coach-data/thm.json')).then((r) => r.json()),
+        fetch(assetUrl('coach-data/memo.json')).then((r) => r.json()),
+        fetch(assetUrl('coach-data/annales.json')).then((r) => r.json()),
         fetchHomeBannerOverride(),
-        fetchCoachModules(),
       ]);
       if (signal.aborted) return;
-      BASE_ALLQ = allqRes;
-      BASE_DS = dsRes;
+      ALLQ = allqRes;
+      DS = dsRes;
       THM = thmRes;
-      BASE_MEMO_ALL = memoRes;
-      BASE_ANN = annRes;
-      applyDynamicModules(modRes.rows);
+      MEMO_ALL = memoRes;
+      ANN = (annRes || []).map((a: any) => ({
+        ...a,
+        surl: a.surl ? assetUrl(a.surl) : '',
+        curl: a.curl ? assetUrl(a.curl) : '',
+        spages: Array.isArray(a.spages) ? a.spages.map(assetUrl) : [],
+        cpages: Array.isArray(a.cpages) ? a.cpages.map(assetUrl) : [],
+      }));
       if (customBanner) bannerSrc = customBanner;
       dataLoaded = true;
       setSub(store.subj && CFG[store.subj] ? store.subj : 'c');
       show();
-
-      unsubModules = subscribeCoachModules(() => {
-        void refreshModules();
-      });
 
       // Hydrate cloud profile in background
       await cloudLoad();
@@ -4568,8 +4457,6 @@ export function mountCoachApp(options: CoachMountOptions): CoachController {
 
   return {
     refreshBanner,
-    refreshModules,
-    getCatalogContext,
     destroy() {
       ac.abort();
       if (dsTimer) window.clearInterval(dsTimer);
@@ -4577,7 +4464,6 @@ export function mountCoachApp(options: CoachMountOptions): CoachController {
       if (boardTimer) window.clearTimeout(boardTimer);
       if (unsubBoard) unsubBoard();
       if (chatUnsub) chatUnsub();
-      if (unsubModules) unsubModules();
       unreadUnsubs.forEach((u) => u());
       document.body.classList.remove('hasside');
     },

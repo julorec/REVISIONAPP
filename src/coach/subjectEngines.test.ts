@@ -16,7 +16,6 @@ import {
   subAct,
   subInput,
 } from './subjectEngines';
-import { sanitizeIngestionResponse } from '../lib/documentIngestion';
 
 test('bode engine scores asymptotic slope, gain, and cutoff frequency accurately', () => {
   const u = {
@@ -102,84 +101,4 @@ test('cloze engine accepts case-insensitive synonyms and Frenglish fixes', () =>
   subInput(u, s, '1', 'to meeting');
   assert.equal(clozeFrac(u, s), 1);
   assert.ok(clozeWidget(u, '0.0', s).includes('cloze-bad'));
-});
-
-test('sanitizeIngestionResponse normalizes generated modules to 20 pts and detects interfaces', () => {
-  const plan = sanitizeIngestionResponse(
-    {
-      subject_key: 'a',
-      confidence: 0.96,
-      reasoning: 'Contient un filtre passe-bas RC et un tracé de Bode.',
-      doc_type: 'td',
-      detected_topics: ['c1'],
-      action_summary: 'Créé un atelier Bode interactif et 2 questions rapides.',
-      ds_module: {
-        operation: 'create',
-        module_type: 'theme',
-        chap: 'c1',
-        title: 'TD Filtres RC',
-        sub: 'Bode asymptotique',
-        dur: 20,
-        ex: [
-          {
-            topic: 'Bode',
-            title: 'Filtre RC',
-            pts: 10,
-            subs: [
-              {
-                pts: 5,
-                kind: 'bode',
-                circuit: 'rc_lp',
-                ref: { gain0: 0, slopeLeft: 0, slopeRight: -20, fcDec: 2 },
-                q: 'Trace le diagramme de Bode.',
-                sol: 'fc = 1 kHz',
-              },
-              {
-                pts: 5,
-                q: 'Pente après fc ?',
-                opts: ['0', '-20 dB/déc', '-40 dB/déc'],
-                ans: 1,
-                sol: '1er ordre = -20 dB/déc',
-              },
-            ],
-          },
-        ],
-      },
-      quiz_questions: [
-        {
-          topic: 'c1',
-          concept: 'Coupure RC',
-          ask: 'Formule de fc ?',
-          opts: ['1/(2πRC)', 'RC'],
-          ans: 0,
-          why: 'Définition',
-        },
-      ],
-      memo_update: {
-        operation: 'enrich',
-        target_id: 'c1',
-        title: 'Réseaux & Bode',
-        pts: ['<b>Coupure</b> : f_c = 1/(2πRC)'],
-      },
-    },
-    {
-      filename: 'TD2_Filtres_RC.pdf',
-      mimeType: 'application/pdf',
-      fileSize: 120000,
-      mode: 'binary',
-      summaryInfo: 'PDF multimodal',
-    }
-  );
-
-  assert.equal(plan.subject_key, 'a');
-  assert.equal(plan.modules.length, 3);
-  const dsMod = plan.modules.find((m) => m.module_type === 'theme')!;
-  const totalPts = dsMod.payload.ex.reduce(
-    (acc: number, ex: { pts: number }) => acc + ex.pts,
-    0
-  );
-  assert.equal(totalPts, 20);
-  assert.ok(plan.interfaces_used.includes('bode'));
-  assert.ok(plan.interfaces_used.includes('quiz'));
-  assert.ok(plan.interfaces_used.includes('memo'));
 });

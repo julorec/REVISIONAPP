@@ -1,23 +1,21 @@
 {
-  "name": "react-example",
+  "name": "coach-partiels-eset",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
+    "test": "node --import tsx --test src/coach/engines.test.ts src/coach/subjectEngines.test.ts src/utils/codeHighlight.test.ts src/utils/leaderboard.test.ts src/utils/quizEngine.test.ts src/utils/quizNormalizer.test.ts src/utils/svgSanitizer.test.ts src/utils/syncState.test.ts",
+    "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.119.2",
     "@tailwindcss/vite": "^4.3.3",
     "@types/katex": "^0.16.8",
     "@vitejs/plugin-react": "^6.1.1",
-    "dotenv": "^17.2.3",
-    "express": "^4.21.2",
     "katex": "^0.19.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
@@ -31,10 +29,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2",
-    "@types/express": "^4.17.21"
+    "typescript": "^7.0.2"
   }
 }
